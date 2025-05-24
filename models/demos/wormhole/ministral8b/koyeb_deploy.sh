@@ -71,8 +71,8 @@ if [ "$START_SERVER" = "false" ]; then
     # Install Python dependencies for the Ministral model
     cd "$MINISTRAL_PATH"
     echo "📦 Installing Python dependencies..."
-    $PYTHON_EXEC -m pip install --no-cache-dir --upgrade pip
-    $PYTHON_EXEC -m pip install --no-cache-dir -r requirements.txt
+    python3 -m pip install --no-cache-dir --upgrade pip
+    python3 -m pip install --no-cache-dir -r requirements.txt
     echo "✅ Python dependencies installed"
     
     # Build TT-Metal
