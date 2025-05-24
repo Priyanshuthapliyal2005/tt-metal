@@ -1,0 +1,26 @@
+[
+  {
+    "prompt": "1, 2, 3, 4, 5,"
+  },
+  {
+    "prompt": "The capital of France is"
+  },
+  {
+    "prompt": "Write a short poem about artificial intelligence."
+  },
+  {
+    "prompt": "Translate the following English text to French: 'Hello, how are you?'"
+  },
+  {
+    "prompt": "Explain the concept of quantum computing in simple terms."
+  },
+  {
+    "prompt": "What are the main differences between Python and JavaScript?"
+  },
+  {
+    "prompt": "Write a recipe for chocolate chip cookies."
+  },
+  {
+    "prompt": "List five interesting facts about the human brain."
+  }
+]

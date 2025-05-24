@@ -1,0 +1,85 @@
+{
+  "name": "tt-metal",
+  "type": "WEB",
+  "strategy": {
+    "type": "DEPLOYMENT_STRATEGY_TYPE_ROLLING"
+  },
+  "routes": [
+    {
+      "port": 8000,
+      "path": "/"
+    }
+  ],
+  "ports": [
+    {
+      "port": 8000,
+      "protocol": "http"
+    }
+  ],
+  "env": [
+    {
+      "scopes": ["region:na"],
+      "key": "HF_TOKEN",
+      "value": "${HF_TOKEN}"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "MODEL_CACHE_PATH",
+      "value": "/app/tt_models/ministral8b"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "TT_METAL_LOGGER_LEVEL",
+      "value": "INFO"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "PORT",
+      "value": "8000"
+    }
+  ],
+  "regions": ["na"],
+  "scalings": [
+    {
+      "scopes": ["region:na"],
+      "min": 1,
+      "max": 1,
+      "targets": []
+    }
+  ],
+  "instance_types": [
+    {
+      "scopes": ["region:na"],
+      "type": "gpu-tenstorrent-n300s"
+    }
+  ],
+  "health_checks": [
+    {
+      "grace_period": 5,
+      "interval": 30,
+      "restart_limit": 3,
+      "timeout": 5,
+      "tcp": {
+        "port": 8000
+      }
+    }
+  ],
+  "volumes": [],
+  "config_files": [],
+  "skip_cache": false,
+  "git": {
+    "repository": "github.com/Priyanshuthapliyal2005/tt-metal",
+    "branch": "main",
+    "tag": "",
+    "sha": "079244aca98a1dfa3913f15884e10a6681013f14",
+    "build_command": "bash -c \"cd $PWD && if [ -f models/demos/wormhole/ministral8b/koyeb_deploy.sh ]; then chmod +x models/demos/wormhole/ministral8b/koyeb_deploy.sh && cd models/demos/wormhole/ministral8b && ./koyeb_deploy.sh; else cd $PWD && ./build_metal.sh && cd models/demos/wormhole/ministral8b && pip install -r requirements.txt; fi\"",
+    "run_command": "bash -c \"cd $PWD/models/demos/wormhole/ministral8b && if [ -f koyeb_deploy.sh ]; then chmod +x koyeb_deploy.sh && ./koyeb_deploy.sh --server; else python server.py --port 8000 --device_id 0 --batch_size 1 --max_seq_len 512 --instruct; fi\"",
+    "no_deploy_on_push": false,
+    "workdir": "/app",
+    "buildpack": {
+      "build_command": "bash -c \"cd $PWD && if [ -f models/demos/wormhole/ministral8b/koyeb_deploy.sh ]; then chmod +x models/demos/wormhole/ministral8b/koyeb_deploy.sh && cd models/demos/wormhole/ministral8b && ./koyeb_deploy.sh; else cd $PWD && ./build_metal.sh && cd models/demos/wormhole/ministral8b && pip install -r requirements.txt; fi\"",
+      "run_command": "bash -c \"cd $PWD/models/demos/wormhole/ministral8b && if [ -f koyeb_deploy.sh ]; then chmod +x koyeb_deploy.sh && ./koyeb_deploy.sh --server; else python server.py --port 8000 --device_id 0 --batch_size 1 --max_seq_len 512 --instruct; fi\"",
+      "privileged": true
+    }
+  }
+}

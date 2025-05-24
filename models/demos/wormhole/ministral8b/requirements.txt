@@ -1,0 +1,27 @@
+# Ministral-8B Koyeb Requirements
+# Python dependencies compatible with both 3.10 (runtime) and 3.11 (build)
+
+# Core dependencies with version constraints for compatibility
+torch>=2.0.0,<=2.2.0
+transformers>=4.38.0
+huggingface_hub>=0.21.0
+tokenizers>=0.15.0
+numpy>=1.24.3
+psutil>=5.9.0
+accelerate>=0.27.0
+sentencepiece>=0.1.99
+requests>=2.31.0
+
+# Build dependencies
+wheel>=0.40.0
+setuptools>=60.0.0
+
+# Web server dependencies
+fastapi>=0.104.0
+uvicorn>=0.24.0
+
+# Monitoring dependencies
+prometheus-client>=0.17.0
+
+# Version-flexible dependencies to handle Python version differences
+pydantic>=1.10.0,<2.0.0  # Avoids pydantic-core issues

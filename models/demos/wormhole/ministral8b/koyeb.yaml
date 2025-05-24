@@ -1,0 +1,64 @@
+name: tt-metal-ministral8b
+strategy:
+  type: DEPLOYMENT_STRATEGY_TYPE_ROLLING
+routes:
+  - port: 8000
+    path: /
+ports:
+  - port: 8000
+    protocol: http
+env:
+  - scopes: [region:na]
+    key: HF_TOKEN
+    value: ${HF_TOKEN}
+  - scopes: [region:na]
+    key: MODEL_CACHE_PATH
+    value: /app/tt_models/ministral8b
+  - scopes: [region:na]
+    key: TT_METAL_LOGGER_LEVEL
+    value: INFO
+  - scopes: [region:na]
+    key: PYO3_USE_ABI3_FORWARD_COMPATIBILITY
+    value: "1"
+  - scopes: [region:na]
+    key: SETUPTOOLS_USE_DISTUTILS
+    value: stdlib
+  - scopes: [region:na]
+    key: PYTHON_VERSION
+    value: "3.11"
+regions: [na]
+scalings:
+  - scopes: [region:na]
+    min: 1
+    max: 1
+    targets: []
+instance_types:
+  - scopes: [region:na]
+    type: gpu-tenstorrent-n300s
+health_checks:
+  - grace_period: 60
+    interval: 30
+    restart_limit: 3
+    timeout: 5
+    tcp:
+      port: 8000
+git:
+  repository: github.com/Priyanshuthapliyal2005/tt-metal
+  branch: main
+  sha: 079244aca98a1dfa3913f15884e10a6681013f14
+  build_command: >-
+    bash -c "cd $PWD && chmod +x models/demos/wormhole/ministral8b/koyeb_deploy.sh && 
+    cd models/demos/wormhole/ministral8b && ./koyeb_deploy.sh"
+  run_command: >- 
+    bash -c "cd $PWD/models/demos/wormhole/ministral8b && 
+    chmod +x koyeb_deploy.sh && ./koyeb_deploy.sh --server"
+  no_deploy_on_push: false
+  workdir: /app
+  buildpack:
+    build_command: >-
+      bash -c "cd $PWD && chmod +x models/demos/wormhole/ministral8b/koyeb_deploy.sh && 
+      cd models/demos/wormhole/ministral8b && ./koyeb_deploy.sh"
+    run_command: >-
+      bash -c "cd $PWD/models/demos/wormhole/ministral8b && 
+      chmod +x koyeb_deploy.sh && ./koyeb_deploy.sh --server"
+    privileged: true
