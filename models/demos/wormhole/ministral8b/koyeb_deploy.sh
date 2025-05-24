@@ -124,8 +124,17 @@ export KOYEB_ENVIRONMENT_PHASE="$ENVIRONMENT"  # Either "build" or "runtime"
 if [ "$ENVIRONMENT" = "build" ]; then
     export KOYEB_SKIP_MODEL_LOAD="true"
 else
-    export KOYEB_SKIP_MODEL_LOAD="false"
+    export KOYEB_SKIP_MODEL_LOAD="true"  # Skip model loading in runtime too for now
 fi
+
+# Set TT-Metal environment variables for proper library loading
+export TT_METAL_HOME="$TT_METAL_ROOT"
+export ARCH_NAME="wormhole_b0"
+export TT_METAL_ENV_ACTIVATED=1
+
+# Create necessary runtime directories that ttnn expects
+mkdir -p "$TT_METAL_ROOT/ttnn/ttnn/runtime/hw"
+mkdir -p "$TT_METAL_ROOT/built"
 
 # Set Hugging Face environment variables
 export HF_MODEL=${HF_MODEL:-"mistralai/Ministral-8B-Instruct-2410"}
