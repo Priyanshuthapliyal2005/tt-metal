@@ -136,6 +136,16 @@ export TT_METAL_ENV_ACTIVATED=1
 mkdir -p "$TT_METAL_ROOT/ttnn/ttnn/runtime/hw"
 mkdir -p "$TT_METAL_ROOT/built"
 
+# Fix the ttnn runtime directory structure for Koyeb
+# This addresses the issue where ttnn expects runtime files in /workspace/ttnn/ttnn/runtime/
+if [ -d "$TT_METAL_ROOT/ttnn/ttnn/runtime" ]; then
+    echo "🔧 Setting up ttnn runtime directory structure..."
+    mkdir -p "/workspace/ttnn/ttnn/runtime"
+    # Copy runtime files as shown in the build command
+    cp -r "$TT_METAL_ROOT/ttnn/ttnn/runtime"/* "/workspace/ttnn/ttnn/runtime/" || true
+    echo "✅ TTNN runtime directory structure set up"
+fi
+
 # Set Hugging Face environment variables
 export HF_MODEL=${HF_MODEL:-"mistralai/Ministral-8B-Instruct-2410"}
 export HF_TOKEN=${HF_TOKEN:-""}
@@ -252,6 +262,23 @@ if [ "$ENVIRONMENT" = "build" ]; then
 elif [ "$ENVIRONMENT" = "runtime" ]; then
     echo "🚀 Runtime Phase: Starting model server..."
     echo "Current user: $(whoami)"
+
+    # Fix the ttnn runtime directory structure for Koyeb at runtime
+    echo "🔧 Setting up ttnn runtime directories for runtime phase..."
+    mkdir -p "/workspace/ttnn/ttnn/runtime"
+    
+    # Copy runtime files using the exact command from your build
+    if [ -d "/workspace/tt_metal/ttnn/ttnn/runtime" ]; then
+        echo "Copying ttnn runtime files from /workspace/tt_metal/ttnn/ttnn/runtime/* to /workspace/ttnn/ttnn/runtime/"
+        cp -r /workspace/tt_metal/ttnn/ttnn/runtime/* /workspace/ttnn/ttnn/runtime/ || true
+        echo "✅ TTNN runtime files copied successfully"
+    elif [ -d "$TT_METAL_ROOT/ttnn/ttnn/runtime" ]; then
+        echo "Copying ttnn runtime files from $TT_METAL_ROOT/ttnn/ttnn/runtime/* to /workspace/ttnn/ttnn/runtime/"
+        cp -r "$TT_METAL_ROOT/ttnn/ttnn/runtime"/* "/workspace/ttnn/ttnn/runtime/" || true
+        echo "✅ TTNN runtime files copied successfully"
+    else
+        echo "⚠️ Warning: Could not find ttnn runtime source directory"
+    fi
 
     # Hardware check (lspci) - simplified as it was failing and skipped
     echo "ℹ️ Skipping lspci hardware check as it was problematic in this environment."
