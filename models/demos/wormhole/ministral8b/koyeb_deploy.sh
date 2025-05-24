@@ -222,7 +222,7 @@ fi
 cd "$TT_METAL_ROOT"
 
 # --- Build Phase Logic ---
-if [ "$ENVIRONMENT" = "build" ] && [ "$START_SERVER" = "false" ]; then
+if [ "$ENVIRONMENT" = "build" ]; then
     echo "🔨 Build Phase: Setting up dependencies and building TT-Metal..."
     
     # Detect which Python version will be used at runtime
