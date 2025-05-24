@@ -26,6 +26,9 @@ env:
   - scopes: [region:na]
     key: PYTHON_VERSION
     value: "3.11"
+  - scopes: [region:na]
+    key: PIP_EXTRA_INDEX_URL
+    value: "https://download.pytorch.org/whl/cpu"
 regions: [na]
 scalings:
   - scopes: [region:na]
