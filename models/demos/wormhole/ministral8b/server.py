@@ -14,15 +14,16 @@ from typing import Dict, Any, Optional, List
 import time
 import threading
 
-# Configure logging
+# Configure logging first
 logging.basicConfig(
     level=os.environ.get('TT_METAL_LOGGER_LEVEL', 'INFO'),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler()],
 )
+logger = logging.getLogger("ministral-server")
 
 # Add the necessary paths to import our modules
-current_dir = os.path.dirname(__file__)
+current_dir = os.path.dirname(os.path.abspath(__file__))
 ministral_dir = current_dir
 wormhole_dir = os.path.dirname(ministral_dir)
 demos_dir = os.path.dirname(wormhole_dir)
@@ -31,16 +32,17 @@ tt_metal_root = os.path.dirname(models_dir)
 
 # Add paths in order of priority
 paths_to_add = [
+    current_dir,    # current directory (for download_model.py)
     tt_metal_root,  # tt-metal root for ttnn
     models_dir,     # models directory
     ministral_dir,  # current model directory
 ]
 
+# Add paths to system path if they don't exist
 for path in paths_to_add:
-    if path not in sys.path:
+    if path and path not in sys.path:
         sys.path.insert(0, path)
-
-logger = logging.getLogger("ministral-server")
+        logger.debug(f"Added to sys.path: {path}")
 # Log the paths for debugging
 logger.info(f"Added paths to sys.path: {paths_to_add}")
 logger.info(f"Current working directory: {os.getcwd()}")
@@ -125,8 +127,37 @@ curl -X POST https://ministral-8b-priyanshuthapliyal2005-40bb59f6.koyeb.app/gene
                     if "library_tweaks" in str(e):
                         logger.info("library_tweaks error detected - this is expected in cloud environments without TT hardware")
                 
+                # Check if model is downloading
+                model_dir = os.environ.get('MODEL_CACHE_PATH', '/workspace/model_cache')
+                lock_file = os.path.join(model_dir, 'downloading.lock')
+                downloading = os.path.exists(lock_file)
+                
+                # Check if model files exist
+                model_files_exist = False
+                if os.path.exists(model_dir):
+                    try:
+                        # Check for config files
+                        config_files_exist = all([
+                            os.path.exists(os.path.join(model_dir, f))
+                            for f in ['config.json', 'tokenizer.json', 'tokenizer_config.json']
+                        ])
+                        
+                        # Check for weight files
+                        weight_files_exist = any([
+                            any(f.endswith(ext) for ext in ['.bin', '.safetensors'])
+                            for f in os.listdir(model_dir) 
+                            if os.path.isfile(os.path.join(model_dir, f))
+                        ]) if os.path.exists(model_dir) else False
+                        
+                        model_files_exist = config_files_exist and weight_files_exist
+                    except Exception as e:
+                        logger.warning(f"Error checking model files: {e}")
+                        model_files_exist = False
+                
                 health_status = {
-                    "status": "ok" if is_koyeb else ("ok" if ttnn_available and len(devices) > 0 else "warning"),
+                    "status": "downloading" if downloading else 
+                             ("ready" if (MODEL is not None and TOKENIZER is not None) else 
+                             ("initializing" if not model_files_exist else "loading")),
                     "model": "ministral8b",
                     "ttnn_available": ttnn_available,
                     "devices": list(map(str, devices)) if devices else [],
@@ -137,9 +168,13 @@ curl -X POST https://ministral-8b-priyanshuthapliyal2005-40bb59f6.koyeb.app/gene
                     "instruct_mode": INSTRUCT_MODE,
                     "environment": os.environ.get('ENVIRONMENT', 'unknown'),
                     "is_koyeb": is_koyeb,
-                    "python_path": sys.path[:3],  # First 3 paths for debugging
                     "working_dir": os.getcwd(),
-                    "model_loaded": MODEL is not None and TOKENIZER is not None
+                    "model_loaded": MODEL is not None and TOKENIZER is not None,
+                    "model_files_exist": model_files_exist,
+                    "downloading": downloading,
+                    "message": "Model is downloading, please wait..." if downloading else 
+                               ("Model is ready" if (MODEL is not None and TOKENIZER is not None) else
+                               "Initializing..." if not model_files_exist else "Loading model...")
                 }
                 
                 if import_error:
@@ -151,14 +186,17 @@ curl -X POST https://ministral-8b-priyanshuthapliyal2005-40bb59f6.koyeb.app/gene
                 logger.error(f"Health check failed: {e}")
                 # Always return 200 OK in Koyeb environment with degraded status
                 is_koyeb = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true'
+                model_dir = os.environ.get('MODEL_CACHE_PATH', '/workspace/model_cache')
+                lock_file = os.path.join(model_dir, 'downloading.lock')
+                
                 error_response = {
-                    "status": "degraded" if is_koyeb else "error",
+                    "status": "downloading" if os.path.exists(lock_file) else "degraded" if is_koyeb else "error",
                     "error": str(e),
                     "working_dir": os.getcwd(),
-                    "python_path": sys.path[:3],
                     "environment": os.environ.get('ENVIRONMENT', 'unknown'),
                     "is_koyeb": is_koyeb,
-                    "message": "Server is running but hardware access is limited"
+                    "message": "Model is downloading, please wait..." if os.path.exists(lock_file) else 
+                               "Server is running but hardware access is limited"
                 }
                 status_code = 200 if is_koyeb else 500
                 self._set_headers(status_code=status_code)
@@ -290,139 +328,113 @@ def download_model_weights(cache_path):
     """Download model weights from Hugging Face."""
     try:
         # Import the download function
-        from download_model import download_ministral_model
+        try:
+            from download_model import download_ministral_model
+        except ImportError as e:
+            logger.error(f"Failed to import download_model: {e}")
+            logger.error(f"Current sys.path: {sys.path}")
+            logger.error(f"Current directory contents: {os.listdir(os.path.dirname(os.path.abspath(__file__)))}")
+            return False
+            
+        logger.info(f"Attempting to download model weights to {cache_path}")
         
         # Set the environment variable for the download script
-        os.environ['MODEL_CACHE_PATH'] = cache_path
+        os.environ['MODEL_CACHE_PATH'] = str(cache_path)
+        
+        # Ensure the cache directory exists
+        os.makedirs(cache_path, exist_ok=True)
         
         # Download the model
-        success = download_ministral_model()
-        if success:
-            logger.info("Successfully downloaded model weights")
-            return True
-        else:
-            logger.error("Failed to download model weights")
+        try:
+            success = download_ministral_model()
+            if success:
+                logger.info("Successfully downloaded model weights")
+                return True
+            else:
+                logger.error("Failed to download model weights (download_ministral_model returned False)")
+                return False
+        except Exception as e:
+            logger.error(f"Exception in download_ministral_model: {str(e)}", exc_info=True)
             return False
+            
     except Exception as e:
-        logger.error(f"Error downloading model weights: {e}")
+        logger.error(f"Unexpected error in download_model_weights: {str(e)}", exc_info=True)
         return False
 
 def preload_model():
     """Preload model into memory."""
+    global MODEL, TOKENIZER
+    
     logger.info("Preloading model into memory...")
+    
+    # Check if we're in Koyeb environment
+    is_koyeb = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true'
+    
+    # Set up model cache path
+    cache_path = os.environ.get('MODEL_CACHE_PATH', '/workspace/model_cache')
+    os.makedirs(cache_path, exist_ok=True)
+    logger.info(f"Using model cache path: {cache_path}")
+    
     try:
-        global MODEL, TOKENIZER
-        
-        # Check if we're in Koyeb environment
-        is_koyeb = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true'
-        
-        if is_koyeb and os.environ.get('KOYEB_SKIP_MODEL_LOAD') == 'true':
-            logger.warning("Skipping model load in Koyeb environment (KOYEB_SKIP_MODEL_LOAD=true)")
-            logger.info("This is useful for testing server startup without model loading")
-            return
+        # Try to import ttnn
+        import ttnn
+        logger.info("TTNN imported successfully")
+    except ImportError as e:
+        logger.error(f"Failed to import ttnn: {e}")
+        if is_koyeb:
+            logger.warning("Continuing server startup for health checks in Koyeb environment")
+            return False
+        else:
+            raise
+    
+    try:
+        # Check for lock file first
+        lock_file = os.path.join(cache_path, 'downloading.lock')
+        if os.path.exists(lock_file):
+            logger.info("Model download in progress, will retry later...")
+            return False
             
-        # First, try to ensure ttnn is available
-        try:
-            import ttnn
-            logger.info("TTNN imported successfully")
-        except ImportError as e:
-            logger.error(f"Failed to import ttnn: {e}")
-            if "library_tweaks" in str(e):
-                logger.error("The library_tweaks import error suggests the ttnn module isn't properly installed or accessible")
-                logger.error("This can happen if the Python path doesn't include the tt-metal repository root")
-                logger.error(f"Current working directory: {os.getcwd()}")
-                logger.error(f"Python path: {sys.path[:5]}")
-                
-                # Try to add the tt-metal root to Python path
-                tt_metal_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-                if tt_metal_root not in sys.path:
-                    logger.info(f"Adding tt-metal root to Python path: {tt_metal_root}")
-                    sys.path.insert(0, tt_metal_root)
-                    try:
-                        import ttnn
-                        logger.info("TTNN imported successfully after adding tt-metal root to path")
-                    except Exception as e2:
-                        logger.error(f"Still failed to import ttnn after path fix: {e2}")
-                        if is_koyeb:
-                            logger.warning("Continuing server startup for health checks in Koyeb environment")
-                            return
-                        else:
-                            raise
-            else:
-                if is_koyeb:
-                    logger.warning("Continuing server startup for health checks in Koyeb environment")
-                    return
-                else:
-                    raise
-        except Exception as e:
-            logger.error(f"Unexpected error importing ttnn: {e}")
-            if is_koyeb:
-                logger.warning("Continuing server startup for health checks in Koyeb environment")
-                return
-            else:
-                raise        # Try to load the model if ttnn is available
-        try:
-            # Set up environment for model loading
-            if is_koyeb:
-                # In Koyeb, download model weights first then load the actual model
-                logger.info("Setting up model loading for Koyeb environment")
-                
-                # Check if model weights exist, if not download them
-                model_cache_path = os.environ.get('MODEL_CACHE_PATH', '/workspace/model_cache')
-                weights_exist = check_model_weights_exist(model_cache_path)
-                
-                if not weights_exist:
-                    logger.info("Model weights not found, downloading from Hugging Face...")
-                    success = download_model_weights(model_cache_path)
-                    if not success:
-                        logger.error("Failed to download model weights, falling back to mock model")
-                        MODEL = "mock_model"
-                        TOKENIZER = "mock_tokenizer"
-                        return
-                
-                # Try to load actual model in Koyeb environment
-                try:
-                    logger.info(f"Loading model with device_id={DEVICE_ID}, batch_size={BATCH_SIZE}, max_seq_len={MAX_SEQ_LEN}")
-                    MODEL, TOKENIZER = load_ministral_model_and_tokenizer(
-                        device_id=DEVICE_ID,
-                        batch_size=BATCH_SIZE,
-                        max_seq_len=MAX_SEQ_LEN,
-                        instruct=INSTRUCT_MODE
-                    )
-                    logger.info("Model loaded successfully in Koyeb environment")
-                except Exception as e:
-                    logger.error(f"Failed to load actual model in Koyeb, using mock: {e}")
-                    import traceback
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    MODEL = "mock_model"
-                    TOKENIZER = "mock_tokenizer"
-            else:
-                # Try to load actual model
-                logger.info(f"Loading model with device_id={DEVICE_ID}, batch_size={BATCH_SIZE}, max_seq_len={MAX_SEQ_LEN}")
-                MODEL, TOKENIZER = load_ministral_model_and_tokenizer(
-                    device_id=DEVICE_ID,
-                    batch_size=BATCH_SIZE,
-                    max_seq_len=MAX_SEQ_LEN,
-                    instruct=INSTRUCT_MODE
-                )
-                logger.info("Model loaded successfully")
-        except ImportError as e:
-            logger.error(f"Failed to import load_model_and_tokenizer: {e}")
-            if is_koyeb:
-                logger.warning("Continuing server startup for health checks in Koyeb environment")
-                MODEL = "mock_model"
-                TOKENIZER = "mock_tokenizer"
-            else:
-                raise
-        except Exception as e:
-            logger.error(f"Failed to load model: {e}")
-            if is_koyeb:
-                logger.warning("Using mock model for Koyeb environment due to loading error")
-                MODEL = "mock_model"
-                TOKENIZER = "mock_tokenizer"
-            else:
-                raise
+        if is_koyeb:
+            logger.info("Setting up model loading for Koyeb environment")
+            # In Koyeb, we need to download the model first
+            if not check_model_weights_exist(cache_path):
+                logger.info("Model weights not found, downloading from Hugging Face...")
+                # Start download in background
+                import subprocess
+                import sys
+                subprocess.Popen([
+                    sys.executable, 
+                    os.path.join(os.path.dirname(__file__), 'download_model.py')
+                ])
+                logger.info("Started model download in background")
+                return False
+            
+            # Now load the model
+            logger.info("Loading model from cache...")
+            MODEL, TOKENIZER = load_ministral_model_and_tokenizer()
+            return True
+            
+        else:
+            # Local development with TT hardware
+            logger.info("Setting up model loading for local development")
+            MODEL, TOKENIZER = load_ministral_model_and_tokenizer()
+            return True
+            
+    except Exception as e:
+        logger.error(f"Error in preload_model: {e}", exc_info=True)
+        if is_koyeb:
+            logger.warning("Using mock model for Koyeb environment due to error")
+            MODEL = "mock_model"
+            TOKENIZER = "mock_tokenizer"
+            return True
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}")
+        if is_koyeb:
+            logger.warning("Using mock model for Koyeb environment due to loading error")
+            MODEL = "mock_model"
+            TOKENIZER = "mock_tokenizer"
+        else:
+            raise
     except Exception as e:
         logger.error(f"Error loading model: {e}")
         # Log the detailed error for debugging

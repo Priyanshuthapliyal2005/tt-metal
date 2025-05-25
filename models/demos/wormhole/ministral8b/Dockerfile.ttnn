@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for Ministral-8B deployment using official TT-Metalium image
-# Based on official Tenstorrent documentation
+# Based on official Tenstorrent documentation: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/installing.html
 
 # Stage 1: Use official TT-Metalium Docker image as base
 FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc AS ttnn-base
@@ -7,37 +7,55 @@ FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-
 # Set working directory
 WORKDIR /workspace
 
-# Install basic dependencies
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy requirements first for better caching
+COPY models/demos/wormhole/ministral8b/requirements-docker.txt /workspace/requirements-docker.txt
+COPY models/demos/wormhole/ministral8b/requirements.txt /workspace/requirements.txt
+
 # Install Python dependencies
-RUN pip install --no-cache-dir \
-    fastapi \
-    uvicorn \
-    python-multipart \
-    python-jose[cryptography] \
-    passlib[bcrypt] \
-    python-dotenv \
-    pydantic \
-    requests
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-docker.txt \
+    && pip install --no-cache-dir \
+        huggingface-hub>=0.19.0 \
+        tqdm>=4.66.0 \
+        requests>=2.31.0 \
+        safetensors>=0.3.0
 
 # Stage 2: Application setup
 FROM ttnn-base AS app
 
-# Set working directory
-WORKDIR /workspace
-
-# Copy the current directory contents
+# Copy the entire tt-metal repository to preserve the expected directory structure
 COPY . /workspace/
 
-# Copy server files to the root of the workspace for backward compatibility
-RUN cp /workspace/models/demos/wormhole/ministral8b/server.py /workspace/ && \
-    cp /workspace/models/demos/wormhole/ministral8b/test_server.py /workspace/ 2>/dev/null || echo "test_server.py not found, skipping"
+# Set working directory to the tt-metal root
+WORKDIR /workspace
 
-# Create model cache directory
-RUN mkdir -p /workspace/model_cache
+# Create necessary directories with proper permissions
+RUN mkdir -p /workspace/model_cache /workspace/huggingface && \
+    chmod -R 777 /workspace/model_cache /workspace/huggingface
+
+# Set permissions for the server and download scripts
+RUN chmod +x /workspace/models/demos/wormhole/ministral8b/server.py && \
+    chmod +x /workspace/models/demos/wormhole/ministral8b/download_model.py
+
+# Set up environment variables
+ENV TT_METAL_HOME=/workspace
+ENV PYTHONPATH=/workspace:/workspace/models
+ENV ARCH_NAME=wormhole_b0
+ENV ENVIRONMENT=production
+ENV IS_DOCKER_ENVIRONMENT=true
+ENV MODEL_CACHE_PATH=/workspace/model_cache
+ENV HF_HOME=/workspace/huggingface
+
+# Health check - just check if the server is running
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose port
+EXPOSE 8000
 
 # Create and set permissions for firmware script
 RUN mkdir -p /scripts
@@ -240,20 +258,9 @@ RUN if [ -f "requirements-docker.txt" ]; then \
 RUN chmod +x /workspace/server.py && \
     [ -f "/workspace/test_server.py" ] && chmod +x /workspace/test_server.py || true
 
-# Set up environment variables for TT-Metal
-ENV TT_METAL_HOME=/workspace
-ENV PYTHONPATH=/workspace:/workspace/models
-ENV ARCH_NAME=wormhole_b0
-ENV ENVIRONMENT=production
-ENV IS_DOCKER_ENVIRONMENT=true
-ENV MODEL_CACHE_PATH=/workspace/model_cache
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Expose port
-EXPOSE 8000
+# Create a startup script that starts the server immediately and downloads the model in the background
+RUN echo '#!/bin/bash\n\n# Start the download in the background\npython /workspace/models/demos/wormhole/ministral8b/download_model.py &\n\n# Start the server immediately\npython /workspace/models/demos/wormhole/ministral8b/server.py --port 8000' > /startup.sh \
+&& chmod +x /startup.sh
 
 # Default command
-CMD ["sh", "-c", "python server.py --port 8000"]
+CMD ["/startup.sh"]
