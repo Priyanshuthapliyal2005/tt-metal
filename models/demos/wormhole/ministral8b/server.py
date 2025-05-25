@@ -204,14 +204,14 @@ curl -X POST https://ministral-8b-priyanshuthapliyal2005-40bb59f6.koyeb.app/gene
         
         logger.info(f"Generating response for prompt: {prompt[:50]}{'...' if len(prompt) > 50 else ''}")
         start_time = time.time()
-        
-        # Check if model is loaded
+          # Check if model is loaded
         global MODEL, TOKENIZER
-        if MODEL is None or TOKENIZER is None:
+        if MODEL is None or TOKENIZER is None or MODEL == "mock_model":
             # In Koyeb environment, return a mock response for health checks
-            if os.environ.get('ENVIRONMENT') == 'runtime':
+            is_koyeb = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true'
+            if is_koyeb:
                 logger.warning("Model not loaded. Returning mock response for health check.")
-                mock_response = "[HEALTH CHECK] Server is running but model is not loaded. This is a mock response."
+                mock_response = f"[MOCK RESPONSE] This is a simulated response to: '{prompt[:50]}...'. The Ministral-8B model is not fully loaded in this cloud environment, but the server infrastructure is working correctly. In a production TT hardware environment, this would generate a proper AI response."
                 return {
                     "text": mock_response,
                     "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(mock_response.split()), "total_tokens": len(prompt.split()) + len(mock_response.split())},
@@ -284,7 +284,7 @@ def preload_model():
         global MODEL, TOKENIZER
         
         # Check if we're in Koyeb environment
-        is_koyeb = os.environ.get('ENVIRONMENT') == 'runtime'
+        is_koyeb = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true'
         
         if is_koyeb and os.environ.get('KOYEB_SKIP_MODEL_LOAD') == 'true':
             logger.warning("Skipping model load in Koyeb environment (KOYEB_SKIP_MODEL_LOAD=true)")
@@ -305,6 +305,7 @@ def preload_model():
                 
                 # Try to add the tt-metal root to Python path
                 tt_metal_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
                 if tt_metal_root not in sys.path:
                     logger.info(f"Adding tt-metal root to Python path: {tt_metal_root}")
                     sys.path.insert(0, tt_metal_root)
@@ -324,22 +325,50 @@ def preload_model():
                     return
                 else:
                     raise
+        except Exception as e:
+            logger.error(f"Unexpected error importing ttnn: {e}")
+            if is_koyeb:
+                logger.warning("Continuing server startup for health checks in Koyeb environment")
+                return
+            else:
+                raise
             
+        # Try to load the model if ttnn is available
         try:
-            from demo.demo_with_prefill import load_model_and_tokenizer
-            
-            logger.info(f"Loading model with device_id={DEVICE_ID}, batch_size={BATCH_SIZE}, max_seq_len={MAX_SEQ_LEN}")
-            MODEL, TOKENIZER = load_model_and_tokenizer(
-                device_id=DEVICE_ID,
-                batch_size=BATCH_SIZE,
-                max_seq_len=MAX_SEQ_LEN,
-                instruct=INSTRUCT_MODE
-            )
-            logger.info("Model loaded successfully")
+            # Set up environment for model loading
+            if is_koyeb:
+                # In Koyeb, try to use mock model loading for now
+                logger.info("Setting up mock model loading for Koyeb environment")
+                MODEL = "mock_model"
+                TOKENIZER = "mock_tokenizer"
+                logger.info("Mock model and tokenizer loaded for Koyeb environment")
+                return
+            else:
+                # Try to load actual model
+                from demo.demo_with_prefill import load_model_and_tokenizer
+                
+                logger.info(f"Loading model with device_id={DEVICE_ID}, batch_size={BATCH_SIZE}, max_seq_len={MAX_SEQ_LEN}")
+                MODEL, TOKENIZER = load_model_and_tokenizer(
+                    device_id=DEVICE_ID,
+                    batch_size=BATCH_SIZE,
+                    max_seq_len=MAX_SEQ_LEN,
+                    instruct=INSTRUCT_MODE
+                )
+                logger.info("Model loaded successfully")
         except ImportError as e:
             logger.error(f"Failed to import load_model_and_tokenizer: {e}")
             if is_koyeb:
                 logger.warning("Continuing server startup for health checks in Koyeb environment")
+                MODEL = "mock_model"
+                TOKENIZER = "mock_tokenizer"
+            else:
+                raise
+        except Exception as e:
+            logger.error(f"Failed to load model: {e}")
+            if is_koyeb:
+                logger.warning("Using mock model for Koyeb environment due to loading error")
+                MODEL = "mock_model"
+                TOKENIZER = "mock_tokenizer"
             else:
                 raise
     except Exception as e:
@@ -348,6 +377,10 @@ def preload_model():
         import traceback
         logger.error(f"Detailed error: {traceback.format_exc()}")
         # Don't exit, let the server start anyway for health checks
+        if os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true':
+            logger.warning("Using mock model for Koyeb environment due to error")
+            MODEL = "mock_model"
+            TOKENIZER = "mock_tokenizer"
 
 def run_server(port=8080, preload=True):
     """Run the HTTP server."""

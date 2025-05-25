@@ -16,7 +16,7 @@ def test_health_endpoint(base_url):
     try:
         response = requests.get(f"{base_url}/health", timeout=10)
         print(f"Status Code: {response.status_code}")
-          if response.status_code == 200:
+        if response.status_code == 200:
             data = response.json()
             print("Health endpoint working!")
             print(f"   Status: {data.get('status')}")
