@@ -444,7 +444,7 @@ def load_ministral_model_and_tokenizer(device_id=0, batch_size=1, max_seq_len=51
     try:
         import ttnn
         import torch
-        from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
+        from models.demos.wormhole.ministral8b.reference.tokenizer import Tokenizer
         from models.demos.wormhole.ministral8b.tt.model_config import TtModelArgs
         from models.demos.wormhole.ministral8b.tt.mistral_model import TtTransformer
 
