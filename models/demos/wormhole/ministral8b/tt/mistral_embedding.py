@@ -3,7 +3,7 @@
 
 import os
 import ttnn
-from ttnn.layer import LightweightModule
+from models.common.lightweightmodule import LightweightModule
 
 
 class TtMistralEmbedding(LightweightModule):

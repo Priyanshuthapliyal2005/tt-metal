@@ -6,7 +6,7 @@ TT-metal implementation of Ministral-8B-Instruct-2410
 import os
 import torch
 import ttnn
-from ttnn.layer import LightweightModule
+from models.common.lightweightmodule import LightweightModule
 from loguru import logger
 
 class TtTransformer(LightweightModule):
