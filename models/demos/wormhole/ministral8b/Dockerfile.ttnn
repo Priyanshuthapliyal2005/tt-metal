@@ -2,7 +2,7 @@
 # Based on official Tenstorrent documentation: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/installing.html
 
 # Stage 1: Use official TT-Metalium Docker image as base
-FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc as ttnn-base
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc AS ttnn-base
 
 # Set working directory
 WORKDIR /workspace
@@ -14,7 +14,7 @@ COPY models/demos/wormhole/ministral8b/requirements-docker.txt /workspace/
 RUN pip install --no-cache-dir -r requirements-docker.txt
 
 # Stage 2: Application setup
-FROM ttnn-base as app
+FROM ttnn-base AS app
 
 # Copy the Ministral-8B model code
 COPY models/demos/wormhole/ministral8b/ /workspace/models/demos/wormhole/ministral8b/

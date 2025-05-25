@@ -16,4 +16,4 @@ numpy>=1.24.0
 
 # Development and testing
 pytest>=7.4.0
-curl>=0.0.1  # For health checks
+# Note: curl is a system command, not a Python package - it's already available in the base image
