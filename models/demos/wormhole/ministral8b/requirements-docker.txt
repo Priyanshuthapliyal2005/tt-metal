@@ -1,0 +1,19 @@
+# Requirements for Ministral-8B server deployment
+# These will be installed in addition to the base TT-Metalium Docker image
+
+# Core ML libraries (may already be in base image)
+torch>=2.0.0
+transformers>=4.30.0
+sentencepiece>=0.1.99
+
+# Web server and API
+flask>=2.3.0
+gunicorn>=21.0.0
+
+# Utilities
+requests>=2.31.0
+numpy>=1.24.0
+
+# Development and testing
+pytest>=7.4.0
+curl>=0.0.1  # For health checks

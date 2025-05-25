@@ -382,6 +382,60 @@ def preload_model():
             MODEL = "mock_model"
             TOKENIZER = "mock_tokenizer"
 
+# Enhanced TTNN detection and hardware availability check
+def detect_ttnn_and_hardware():
+    """Detect TTNN availability and hardware status."""
+    ttnn_status = {
+        'ttnn_available': False,
+        'hardware_available': False,
+        'devices': [],
+        'error': None,
+        'environment_type': 'unknown'
+    }
+    
+    # Detect environment type
+    is_docker = os.environ.get('IS_DOCKER_ENVIRONMENT') == 'true'
+    is_koyeb = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true'
+    
+    if is_docker:
+        ttnn_status['environment_type'] = 'docker'
+    elif is_koyeb:
+        ttnn_status['environment_type'] = 'koyeb'
+    else:
+        ttnn_status['environment_type'] = 'local'
+    
+    try:
+        import ttnn
+        ttnn_status['ttnn_available'] = True
+        logger.info("✅ TTNN module imported successfully")
+        
+        # Try to detect hardware
+        try:
+            devices = ttnn.get_device_ids()
+            if devices and len(devices) > 0:
+                ttnn_status['hardware_available'] = True
+                ttnn_status['devices'] = list(map(str, devices))
+                logger.info(f"✅ TT Hardware detected: {ttnn_status['devices']}")
+            else:
+                logger.info("⚠️ TTNN available but no TT hardware detected")
+                
+        except Exception as device_error:
+            logger.warning(f"Hardware detection failed: {device_error}")
+            ttnn_status['error'] = f"Hardware detection failed: {device_error}"
+            
+    except ImportError as e:
+        ttnn_status['error'] = f"TTNN import failed: {e}"
+        logger.warning(f"❌ TTNN import failed: {e}")
+    except Exception as e:
+        ttnn_status['error'] = f"TTNN initialization failed: {e}"
+        logger.warning(f"❌ TTNN initialization failed: {e}")
+        
+    return ttnn_status
+
+# Initialize TTNN status
+TTNN_STATUS = detect_ttnn_and_hardware()
+logger.info(f"TTNN Status: {TTNN_STATUS}")
+
 def run_server(port=8080, preload=True):
     """Run the HTTP server."""
     global SERVER_START_TIME

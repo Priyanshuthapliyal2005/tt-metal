@@ -1,0 +1,49 @@
+# Multi-stage Dockerfile for Ministral-8B deployment using official TT-Metalium image
+# Based on official Tenstorrent documentation: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/installing.html
+
+# Stage 1: Use official TT-Metalium Docker image as base
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc as ttnn-base
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy requirements first for better caching
+COPY models/demos/wormhole/ministral8b/requirements-docker.txt /workspace/
+
+# Install additional Python dependencies for web server
+RUN pip install --no-cache-dir -r requirements-docker.txt
+
+# Stage 2: Application setup
+FROM ttnn-base as app
+
+# Copy the Ministral-8B model code
+COPY models/demos/wormhole/ministral8b/ /workspace/models/demos/wormhole/ministral8b/
+COPY models/common/ /workspace/models/common/
+COPY models/utility_functions.py /workspace/models/
+COPY models/generation_utils.py /workspace/models/
+
+# Set up environment variables for TT-Metal
+ENV TT_METAL_HOME=/workspace
+ENV PYTHONPATH=/workspace:/workspace/models
+ENV ARCH_NAME=wormhole_b0
+
+# Environment variables for deployment
+ENV ENVIRONMENT=production
+ENV IS_DOCKER_ENVIRONMENT=true
+ENV MODEL_CACHE_PATH=/workspace/model_cache
+
+# Create model cache directory
+RUN mkdir -p /workspace/model_cache
+
+# Set permissions
+RUN chmod +x /workspace/models/demos/wormhole/ministral8b/server.py
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose port
+EXPOSE 8000
+
+# Default command
+CMD ["python", "/workspace/models/demos/wormhole/ministral8b/server.py", "--host", "0.0.0.0", "--port", "8000"]
