@@ -52,19 +52,26 @@ class TtModelArgs:
         "QKV_MM_OUTPUT",
         "CONCAT_HEADS_OUTPUT",
         "LM_HEAD_OUTPUT",
-        "ATTN_W_LAYOUT",
-        # Decoder
+        "ATTN_W_LAYOUT",        # Decoder
         "DEC_SKIP_OUTPUT",
     )
 
     def __init__(self, device, instruct=False):
+        # Check if we're in Koyeb/cloud environment and use downloaded model path
+        is_koyeb = os.environ.get('ENVIRONMENT') == 'runtime'
+        model_cache_path = os.environ.get('MODEL_CACHE_PATH', '/workspace/model_cache')
+        
+        if is_koyeb and os.path.exists(model_cache_path):
+            # Use downloaded model cache path in Koyeb environment
+            self.DEFAULT_CKPT_DIR = model_cache_path
+            self.DEFAULT_TOKENIZER_PATH = model_cache_path
+            self.DEFAULT_CACHE_PATH = model_cache_path
+            logger.info(f"Using Koyeb model cache path: {model_cache_path}")
+        
         # Create directories if they don't exist
         os.makedirs(self.DEFAULT_CKPT_DIR, exist_ok=True)
         os.makedirs(self.DEFAULT_TOKENIZER_PATH, exist_ok=True)
         os.makedirs(self.DEFAULT_CACHE_PATH, exist_ok=True)
-        
-        # Less strict checking for Koyeb environment
-        is_koyeb = os.environ.get('ENVIRONMENT') == 'runtime'
         
         if not is_koyeb:
             # Only assert in non-Koyeb environments
@@ -83,32 +90,71 @@ class TtModelArgs:
                 self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
             ), f"weights consolidated.00.pth file does not exist. Please use the script to download and untar the weights."
         else:
-            # In Koyeb environment, just log warnings
-            if not os.path.exists(self.DEFAULT_CKPT_DIR):
-                logger.warning(f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, creating it...")
-                os.makedirs(self.DEFAULT_CKPT_DIR, exist_ok=True)
+            # In Koyeb environment, check for downloaded files
+            consolidated_paths = [
+                os.path.join(self.DEFAULT_CKPT_DIR, "consolidated.bin"),  # New format from download script
+                os.path.join(self.DEFAULT_CKPT_DIR, "consolidated.00.pth"),  # Original format
+            ]
+            
+            tokenizer_paths = [
+                os.path.join(self.DEFAULT_TOKENIZER_PATH, "tokenizer.json"),  # HF format
+                os.path.join(self.DEFAULT_TOKENIZER_PATH, "tokenizer.model"),  # Original format
+            ]
+              # Check if downloaded weights exist
+            weights_found = any(os.path.isfile(path) for path in consolidated_paths)
+            tokenizer_found = any(os.path.isfile(path) for path in tokenizer_paths)
+            
+            if not weights_found:
+                logger.warning(f"No consolidated weights found in {self.DEFAULT_CKPT_DIR}")
+                logger.warning("Model weights may need to be downloaded")
                 
-            if not os.path.isfile(self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"):
-                logger.warning(f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, creating empty placeholder...")
-                with open(self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model", 'w') as f:
-                    f.write('')
-                    
-            if not os.path.isfile(self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"):
-                logger.warning(f"Weights file {self.DEFAULT_CKPT_DIR + '/consolidated.00.pth'} does not exist, creating empty placeholder...")
-                with open(self.DEFAULT_CKPT_DIR + "/consolidated.00.pth", 'w') as f:
-                    f.write('')
+            if not tokenizer_found:
+                logger.warning(f"No tokenizer found in {self.DEFAULT_TOKENIZER_PATH}")
+                logger.warning("Tokenizer may need to be downloaded")
 
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
-        logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
+        logger.info(f"Tokenizer file: {self.tokenizer_path}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
         self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
 
-        # Load weights and tokenizer
-        self.consolidated_weights_path = self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-        self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
+        # Load weights and tokenizer - handle both original and downloaded formats
+        if is_koyeb and os.path.exists(model_cache_path):
+            # In Koyeb, check for downloaded format first, then fallback to original
+            consolidated_bin = os.path.join(self.DEFAULT_CKPT_DIR, "consolidated.bin")
+            consolidated_pth = os.path.join(self.DEFAULT_CKPT_DIR, "consolidated.00.pth") 
+            
+            if os.path.isfile(consolidated_bin):
+                self.consolidated_weights_path = consolidated_bin
+                logger.info(f"Using downloaded weights: {consolidated_bin}")
+            elif os.path.isfile(consolidated_pth):
+                self.consolidated_weights_path = consolidated_pth
+                logger.info(f"Using original weights: {consolidated_pth}")
+            else:
+                # Default to .bin format for download attempt
+                self.consolidated_weights_path = consolidated_bin
+                logger.warning(f"No weights found, will attempt download to: {consolidated_bin}")
+            
+            # Check tokenizer format
+            tokenizer_json = os.path.join(self.DEFAULT_TOKENIZER_PATH, "tokenizer.json")
+            tokenizer_model = os.path.join(self.DEFAULT_TOKENIZER_PATH, "tokenizer.model")
+            
+            if os.path.isfile(tokenizer_json):
+                self.tokenizer_path = tokenizer_json
+                logger.info(f"Using HF tokenizer: {tokenizer_json}")
+            elif os.path.isfile(tokenizer_model):
+                self.tokenizer_path = tokenizer_model
+                logger.info(f"Using original tokenizer: {tokenizer_model}")
+            else:
+                # Default to .json format for download attempt
+                self.tokenizer_path = tokenizer_json
+                logger.warning(f"No tokenizer found, will attempt download to: {tokenizer_json}")
+        else:
+            # Original behavior for non-Koyeb environments
+            self.consolidated_weights_path = self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
+            self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
 
         self.instruct = instruct
 
