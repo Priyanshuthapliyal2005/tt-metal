@@ -39,6 +39,16 @@
     },
     {
       "scopes": ["region:na"],
+      "key": "IS_KOYEB_ENVIRONMENT",
+      "value": "true"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "KOYEB_SKIP_MODEL_LOAD",
+      "value": "false"
+    },
+    {
+      "scopes": ["region:na"],
       "key": "MODEL_CACHE_PATH",
       "value": "/workspace/model_cache"
     },
