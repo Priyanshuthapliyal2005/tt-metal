@@ -93,7 +93,12 @@
     "branch": "main",
     "workdir": ".",
     "docker": {
-      "dockerfile": "models/demos/wormhole/ministral8b/Dockerfile.ttnn"
+      "dockerfile": "models/demos/wormhole/ministral8b/Dockerfile.ttnn",
+      "entrypoint": [],
+      "command": "",
+      "args": [],
+      "target": "app",
+      "privileged": false
     }
   }
 }
