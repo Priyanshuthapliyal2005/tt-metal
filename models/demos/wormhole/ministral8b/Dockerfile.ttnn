@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for Ministral-8B deployment using official TT-Metalium image
-# Based on official Tenstorrent documentation: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/installing.html
+# Based on official Tenstorrent documentation
 
 # Stage 1: Use official TT-Metalium Docker image as base
 FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc AS ttnn-base
@@ -7,33 +7,244 @@ FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-
 # Set working directory
 WORKDIR /workspace
 
-# Copy requirements first for better caching
-COPY models/demos/wormhole/ministral8b/requirements-docker.txt /workspace/requirements-docker.txt
+# Install basic dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install additional Python dependencies for web server
-RUN pip install --no-cache-dir -r /workspace/requirements-docker.txt
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    python-multipart \
+    python-jose[cryptography] \
+    passlib[bcrypt] \
+    python-dotenv \
+    pydantic \
+    requests
 
 # Stage 2: Application setup
 FROM ttnn-base AS app
 
-# Copy the entire tt-metal repository to preserve the expected directory structure
-COPY . /workspace/
-
-# Set working directory to the tt-metal root
+# Set working directory
 WORKDIR /workspace
+
+# Copy the current directory contents
+COPY . /workspace/
 
 # Create model cache directory
 RUN mkdir -p /workspace/model_cache
 
-# Set permissions for the server script
-RUN chmod +x /workspace/models/demos/wormhole/ministral8b/server.py
+# Create and set permissions for firmware script
+RUN mkdir -p /scripts
+COPY <<'EOF' /scripts/generate_firmware_scripts.sh
+#!/bin/bash
+
+# Create the necessary directories
+mkdir -p /workspace/runtime/hw/toolchain/wormhole
+
+# Create the firmware_brisc.ld file
+cat > /workspace/runtime/hw/toolchain/wormhole/firmware_brisc.ld << 'EOL'
+/* Linker script for BRISC firmware */
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+
+MEMORY {
+    BRISC_L1 (rwx) : ORIGIN = 0xFFB20000, LENGTH = 0x10000
+}
+
+SECTIONS {
+    .text : {
+        *(.text*)
+    } > BRISC_L1
+
+    .data : {
+        *(.data*)
+        *(.rodata*)
+        *(.sdata*)
+    } > BRISC_L1
+
+    .bss : {
+        *(.bss*)
+        *(COMMON)
+    } > BRISC_L1
+
+    /DISCARD/ : {
+        *(.comment)
+        *(.note*)
+    }
+}
+EOL
+
+# Create firmware_trisc0.ld
+cat > /workspace/runtime/hw/toolchain/wormhole/firmware_trisc0.ld << 'EOL'
+/* Linker script for TRISC0 firmware */
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+
+MEMORY {
+    TRISC0_L1 (rwx) : ORIGIN = 0xFFB00000, LENGTH = 0x10000
+}
+
+SECTIONS {
+    .text : {
+        *(.text*)
+    } > TRISC0_L1
+
+    .data : {
+        *(.data*)
+        *(.rodata*)
+        *(.sdata*)
+    } > TRISC0_L1
+
+    .bss : {
+        *(.bss*)
+        *(COMMON)
+    } > TRISC0_L1
+}
+EOL
+
+# Create firmware_trisc1.ld
+cat > /workspace/runtime/hw/toolchain/wormhole/firmware_trisc1.ld << 'EOL'
+/* Linker script for TRISC1 firmware */
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+
+MEMORY {
+    TRISC1_L1 (rwx) : ORIGIN = 0xFFB10000, LENGTH = 0x10000
+}
+
+SECTIONS {
+    .text : {
+        *(.text*)
+    } > TRISC1_L1
+
+    .data : {
+        *(.data*)
+        *(.rodata*)
+        *(.sdata*)
+    } > TRISC1_L1
+
+    .bss : {
+        *(.bss*)
+        *(COMMON)
+    } > TRISC1_L1
+}
+EOL
+
+# Create firmware_trisc2.ld
+cat > /workspace/runtime/hw/toolchain/wormhole/firmware_trisc2.ld << 'EOL'
+/* Linker script for TRISC2 firmware */
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+
+MEMORY {
+    TRISC2_L1 (rwx) : ORIGIN = 0xFFB30000, LENGTH = 0x10000
+}
+
+SECTIONS {
+    .text : {
+        *(.text*)
+    } > TRISC2_L1
+
+    .data : {
+        *(.data*)
+        *(.rodata*)
+        *(.sdata*)
+    } > TRISC2_L1
+
+    .bss : {
+        *(.bss*)
+        *(COMMON)
+    } > TRISC2_L1
+}
+EOL
+
+# Create firmware_ncrisc.ld
+cat > /workspace/runtime/hw/toolchain/wormhole/firmware_ncrisc.ld << 'EOL'
+/* Linker script for NCRISC firmware */
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+
+MEMORY {
+    NCRISC_L1 (rwx) : ORIGIN = 0xFFBF0000, LENGTH = 0x10000
+}
+
+SECTIONS {
+    .text : {
+        *(.text*)
+    } > NCRISC_L1
+
+    .data : {
+        *(.data*)
+        *(.rodata*)
+        *(.sdata*)
+    } > NCRISC_L1
+
+    .bss : {
+        *(.bss*)
+        *(COMMON)
+    } > NCRISC_L1
+}
+EOL
+
+# Create firmware_erisc.ld
+cat > /workspace/runtime/hw/toolchain/wormhole/firmware_erisc.ld << 'EOL'
+/* Linker script for ERISC firmware */
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+
+MEMORY {
+    ERISC_L1 (rwx) : ORIGIN = 0xFFBE0000, LENGTH = 0x10000
+}
+
+SECTIONS {
+    .text : {
+        *(.text*)
+    } > ERISC_L1
+
+    .data : {
+        *(.data*)
+        *(.rodata*)
+        *(.sdata*)
+    } > ERISC_L1
+
+    .bss : {
+        *(.bss*)
+        *(COMMON)
+    } > ERISC_L1
+}
+EOL
+
+echo "Created firmware linker scripts in: /workspace/runtime/hw/toolchain/wormhole"
+echo "Files created:"
+ls -la /workspace/runtime/hw/toolchain/wormhole/
+EOF
+
+# Make the script executable and run it
+RUN chmod +x /scripts/generate_firmware_scripts.sh && \
+    /scripts/generate_firmware_scripts.sh
+
+# Install requirements if the file exists
+RUN if [ -f "requirements-docker.txt" ]; then \
+        pip install --no-cache-dir -r requirements-docker.txt; \
+    else \
+        echo "requirements-docker.txt not found, skipping dependency installation"; \
+    fi
+
+# Set execute permission for server.py if it exists
+RUN if [ -f "server.py" ]; then \
+        chmod +x server.py; \
+    else \
+        echo "Warning: server.py not found in the current directory"; \
+        echo "Files in current directory:"; \
+        ls -la; \
+    fi
 
 # Set up environment variables for TT-Metal
 ENV TT_METAL_HOME=/workspace
 ENV PYTHONPATH=/workspace:/workspace/models
 ENV ARCH_NAME=wormhole_b0
-
-# Environment variables for deployment
 ENV ENVIRONMENT=production
 ENV IS_DOCKER_ENVIRONMENT=true
 ENV MODEL_CACHE_PATH=/workspace/model_cache
@@ -46,4 +257,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 EXPOSE 8000
 
 # Default command
-CMD ["python", "/workspace/models/demos/wormhole/ministral8b/server.py", "--port", "8000"]
+CMD ["sh", "-c", "python server.py --port 8000"]
