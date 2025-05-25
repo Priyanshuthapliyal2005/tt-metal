@@ -1,0 +1,45 @@
+# Docker ignore file for tt-metal ministral8b build
+# Ignore build artifacts and cache directories
+build/
+build_*/
+.git/
+.gitmodules
+*.log
+*.tmp
+.cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# Ignore documentation and non-essential files
+docs/
+tech_reports/
+README.md
+LICENSE*
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+
+# Ignore development tools
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Keep only essential model and core files
+!models/
+!tt_metal/
+!ttnn/
+!tt_stl/
+!cmake/
+!CMakeLists.txt
+!setup.py
+!pyproject.toml
+!requirements*.txt

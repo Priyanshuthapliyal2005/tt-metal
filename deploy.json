@@ -1,0 +1,99 @@
+{
+  "name": "tt-metal",
+  "type": "WEB",
+  "strategy": {
+    "type": "DEPLOYMENT_STRATEGY_TYPE_ROLLING"
+  },
+  "routes": [
+    {
+      "port": 8000,
+      "path": "/"
+    }
+  ],
+  "ports": [
+    {
+      "port": 8000,
+      "protocol": "http"
+    }
+  ],
+  "env": [
+    {
+      "scopes": ["region:na"],
+      "key": "ARCH_NAME",
+      "value": "wormhole_b0"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "ENVIRONMENT",
+      "value": "production"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "HF_TOKEN",
+      "value": "YOUR_HF_TOKEN_HERE"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "IS_DOCKER_ENVIRONMENT",
+      "value": "true"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "MODEL_CACHE_PATH",
+      "value": "/workspace/model_cache"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "PYTHONPATH",
+      "value": "/workspace:/workspace/models"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "TT_METAL_HOME",
+      "value": "/workspace"
+    },
+    {
+      "scopes": ["region:na"],
+      "key": "TT_METAL_LOGGER_LEVEL",
+      "value": "INFO"
+    }
+  ],
+  "regions": ["na"],
+  "scalings": [
+    {
+      "scopes": ["region:na"],
+      "min": 1,
+      "max": 1,
+      "targets": []
+    }
+  ],
+  "instance_types": [
+    {
+      "scopes": ["region:na"],
+      "type": "gpu-tenstorrent-n300s"
+    }
+  ],
+  "health_checks": [
+    {
+      "grace_period": 60,
+      "interval": 30,
+      "restart_limit": 3,
+      "timeout": 10,
+      "http": {
+        "port": 8000,
+        "path": "/health"
+      }
+    }
+  ],
+  "volumes": [],
+  "config_files": [],
+  "skip_cache": false,
+  "git": {
+    "repository": "github.com/Priyanshuthapliyal2005/tt-metal",
+    "branch": "main",
+    "workdir": "./models/demos/wormhole/ministral8b",
+    "docker": {
+      "dockerfile": "Dockerfile.ttnn"
+    }
+  }
+}

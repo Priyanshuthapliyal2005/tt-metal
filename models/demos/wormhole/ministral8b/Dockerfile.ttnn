@@ -8,19 +8,28 @@ FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-
 WORKDIR /workspace
 
 # Copy requirements first for better caching
-COPY models/demos/wormhole/ministral8b/requirements-docker.txt /workspace/
+COPY models/demos/wormhole/ministral8b/requirements-docker.txt /workspace/requirements-docker.txt
 
 # Install additional Python dependencies for web server
-RUN pip install --no-cache-dir -r requirements-docker.txt
+RUN pip install --no-cache-dir -r /workspace/requirements-docker.txt
 
 # Stage 2: Application setup
 FROM ttnn-base AS app
 
-# Copy the Ministral-8B model code
-COPY models/demos/wormhole/ministral8b/ /workspace/models/demos/wormhole/ministral8b/
-COPY models/common/ /workspace/models/common/
-COPY models/utility_functions.py /workspace/models/
-COPY models/generation_utils.py /workspace/models/
+# Copy the entire tt-metal repository for proper module resolution
+COPY . /workspace/
+
+# Ensure we have the correct working directory structure
+WORKDIR /workspace
+
+# Install tt-metal if needed (this might be handled by the base image)
+# RUN pip install -e .
+
+# Create model cache directory
+RUN mkdir -p /workspace/model_cache
+
+# Set permissions for the server script
+RUN chmod +x /workspace/models/demos/wormhole/ministral8b/server.py
 
 # Set up environment variables for TT-Metal
 ENV TT_METAL_HOME=/workspace
@@ -31,12 +40,6 @@ ENV ARCH_NAME=wormhole_b0
 ENV ENVIRONMENT=production
 ENV IS_DOCKER_ENVIRONMENT=true
 ENV MODEL_CACHE_PATH=/workspace/model_cache
-
-# Create model cache directory
-RUN mkdir -p /workspace/model_cache
-
-# Set permissions
-RUN chmod +x /workspace/models/demos/wormhole/ministral8b/server.py
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
