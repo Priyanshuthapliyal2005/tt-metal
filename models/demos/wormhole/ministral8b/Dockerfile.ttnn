@@ -8,7 +8,7 @@ FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-
 WORKDIR /workspace
 
 # Copy requirements first for better caching
-COPY requirements-docker.txt /workspace/requirements-docker.txt
+COPY models/demos/wormhole/ministral8b/requirements-docker.txt /workspace/requirements-docker.txt
 
 # Install additional Python dependencies for web server
 RUN pip install --no-cache-dir -r /workspace/requirements-docker.txt
@@ -16,14 +16,8 @@ RUN pip install --no-cache-dir -r /workspace/requirements-docker.txt
 # Stage 2: Application setup
 FROM ttnn-base AS app
 
-# Create the necessary directory structure to match expected tt-metal layout
-RUN mkdir -p /workspace/models/demos/wormhole/ministral8b
-RUN mkdir -p /workspace/models/common
-RUN mkdir -p /workspace/tt_metal
-RUN mkdir -p /workspace/ttnn
-
-# Copy the ministral8b files into the correct location
-COPY . /workspace/models/demos/wormhole/ministral8b/
+# Copy the entire tt-metal repository to preserve the expected directory structure
+COPY . /workspace/
 
 # Set working directory to the tt-metal root
 WORKDIR /workspace
@@ -52,4 +46,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 EXPOSE 8000
 
 # Default command
-CMD ["python", "/workspace/models/demos/wormhole/ministral8b/server.py", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "/workspace/models/demos/wormhole/ministral8b/server.py", "--port", "8000"]

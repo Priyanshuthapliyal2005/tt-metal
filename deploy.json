@@ -91,9 +91,9 @@
   "git": {
     "repository": "github.com/Priyanshuthapliyal2005/tt-metal",
     "branch": "main",
-    "workdir": "./models/demos/wormhole/ministral8b",
+    "workdir": ".",
     "docker": {
-      "dockerfile": "Dockerfile.ttnn"
+      "dockerfile": "models/demos/wormhole/ministral8b/Dockerfile.ttnn"
     }
   }
 }
