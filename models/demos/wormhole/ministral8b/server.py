@@ -580,42 +580,6 @@ def detect_ttnn_and_hardware():
 TTNN_STATUS = detect_ttnn_and_hardware()
 logger.info(f"TTNN Status: {TTNN_STATUS}")
 
-def run_server(port=8080, preload=True):
-    """Run the HTTP server."""
-    global SERVER_START_TIME
-    SERVER_START_TIME = time.time()
-    
-    if preload:
-        # Preload model in a separate thread
-        threading.Thread(target=preload_model).start()
-    
-    server_address = ("", port)
-    httpd = HTTPServer(server_address, ModelRequestHandler)
-    logger.info(f"Starting Ministral-8B server on port {port}")
-    httpd.serve_forever()
-
-def main():
-    parser = argparse.ArgumentParser(description="Ministral-8B API Server")
-    parser.add_argument("--port", type=int, default=8080, help="Port to listen on")
-    parser.add_argument("--device_id", type=int, default=0, help="Device ID to use")
-    parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
-    parser.add_argument("--max_seq_len", type=int, default=512, help="Maximum sequence length")
-    parser.add_argument("--instruct", action="store_true", help="Use instruct mode")
-    parser.add_argument("--no-preload", action="store_true", help="Don't preload model at startup")
-    
-    args = parser.parse_args()
-    
-    global DEVICE_ID, BATCH_SIZE, MAX_SEQ_LEN, INSTRUCT_MODE
-    DEVICE_ID = args.device_id
-    BATCH_SIZE = args.batch_size
-    MAX_SEQ_LEN = args.max_seq_len
-    INSTRUCT_MODE = args.instruct
-    
-    run_server(port=args.port, preload=not args.no_preload)
-
-if __name__ == "__main__":
-    main()
-
 def process_question(question, batch_size=1, max_seq_len=128, device_id=0, instruct=True, temperature=0.7):
     """
     Process a question using TTNN inference with Hugging Face tokenization.
@@ -773,3 +737,45 @@ def process_question(question, batch_size=1, max_seq_len=128, device_id=0, instr
             
         except Exception as fallback_error:
             return f"Both TTNN and HF fallback failed. Question: '{question[:50]}...' Error: {str(e)} Fallback error: {str(fallback_error)}"
+
+def run_server(port=None, preload=True):
+    """Run the HTTP server."""
+    global SERVER_START_TIME
+    SERVER_START_TIME = time.time()
+    
+    # Use environment variable for port if not specified
+    if port is None:
+        port = int(os.environ.get('PORT', 8000))  # Default to 8000 for Koyeb
+    
+    if preload:
+        # Preload model in a separate thread
+        threading.Thread(target=preload_model).start()
+    
+    server_address = ("", port)
+    httpd = HTTPServer(server_address, ModelRequestHandler)
+    logger.info(f"Starting Ministral-8B server on port {port}")
+    httpd.serve_forever()
+
+def main():
+    parser = argparse.ArgumentParser(description="Ministral-8B API Server")
+    parser.add_argument("--port", type=int, help="Port to listen on (default: from PORT env var or 8000)")
+    parser.add_argument("--device_id", type=int, default=0, help="Device ID to use")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
+    parser.add_argument("--max_seq_len", type=int, default=512, help="Maximum sequence length")
+    parser.add_argument("--instruct", action="store_true", help="Use instruct mode")
+    parser.add_argument("--no-preload", action="store_true", help="Don't preload model at startup")
+    
+    args = parser.parse_args()
+    
+    global DEVICE_ID, BATCH_SIZE, MAX_SEQ_LEN, INSTRUCT_MODE
+    DEVICE_ID = args.device_id
+    BATCH_SIZE = args.batch_size
+    MAX_SEQ_LEN = args.max_seq_len
+    INSTRUCT_MODE = args.instruct
+      # Determine port: command line arg > environment variable > default 8000
+    port = args.port if args.port else int(os.environ.get('PORT', 8000))
+    
+    run_server(port=port, preload=not args.no_preload)
+
+if __name__ == "__main__":
+    main()
