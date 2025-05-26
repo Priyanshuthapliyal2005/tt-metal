@@ -18,6 +18,7 @@ import threading
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import psutil
+from pathlib import Path
 
 # Configure logging first
 logging.basicConfig(
@@ -380,20 +381,19 @@ def preload_model():
                 import sys
                 subprocess.Popen([
                     sys.executable, 
-                    os.path.join(os.path.dirname(__file__), 'download_model.py')
-                ])
+                    os.path.join(os.path.dirname(__file__), 'download_model.py')                ])
                 logger.info("Started model download in background")
                 return False
             
             # Now load the model
             logger.info("Loading model from cache...")
-            MODEL, TOKENIZER = load_ministral_model_and_tokenizer()
+            MODEL, TOKENIZER = load_ministral_model_and_tokenizer_optimized()
             return True
             
         else:
             # Local development with TT hardware
             logger.info("Setting up model loading for local development")
-            MODEL, TOKENIZER = load_ministral_model_and_tokenizer()
+            MODEL, TOKENIZER = load_ministral_model_and_tokenizer_optimized()
             return True
             
     except Exception as e:
@@ -525,6 +525,187 @@ def load_ministral_model_and_tokenizer(device_id=0, batch_size=1, max_seq_len=51
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise e
+
+def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_seq_len=512, instruct=True):
+    """
+    Memory-optimized loading of Ministral model and tokenizer.
+    Uses chunked loading and lazy initialization to minimize RAM usage.
+    """
+    logger.info(f"Loading Ministral-8B model (OPTIMIZED) with device_id={device_id}, batch_size={batch_size}, max_seq_len={max_seq_len}")
+
+    # Import memory-efficient loader
+    try:
+        from memory_efficient_loader import MemoryOptimizedLoader, check_system_resources
+        import gc
+    except ImportError:
+        logger.warning("Memory-efficient loader not available, falling back to standard loading")
+        return load_ministral_model_and_tokenizer(device_id, batch_size, max_seq_len, instruct)
+    
+    # Check system resources
+    resources = check_system_resources()
+    available_ram = resources.get('available_ram_gb', 0)
+    logger.info(f"Available RAM: {available_ram:.2f}GB")
+    
+    if available_ram < 8:
+        logger.error(f"Insufficient RAM for model loading: {available_ram:.2f}GB available, minimum 8GB required")
+        raise RuntimeError("Insufficient memory for model loading")
+    
+    try:
+        import ttnn
+        import torch
+        from models.demos.wormhole.ministral8b.reference.tokenizer import Tokenizer
+        from models.demos.wormhole.ministral8b.tt.model_config import TtModelArgs
+        from models.demos.wormhole.ministral8b.tt.mistral_model import TtTransformer
+
+        # Initialize memory-efficient loader
+        cache_path = os.environ.get('MODEL_CACHE_PATH', '/workspace/model_cache')
+        chunk_size_mb = 256 if available_ram < 16 else 512
+        loader = MemoryOptimizedLoader(cache_path, chunk_size_mb=chunk_size_mb)
+        
+        # Create TT device
+        device = ttnn.open_device(device_id=device_id)
+        logger.info(f"Opened TT device {device_id}")
+
+        # Initialize model args
+        model_args = TtModelArgs(device, instruct=instruct)
+        logger.info("Initialized model args")
+
+        # Initialize tokenizer using memory-efficient method
+        tokenizer = loader.create_minimal_tokenizer(Path(model_args.tokenizer_path))
+        logger.info(f"Initialized minimal tokenizer")
+
+        # Load weights using lazy loading
+        weights_path = Path(model_args.consolidated_weights_path)
+        if not weights_path.exists():
+            raise FileNotFoundError(f"Consolidated weights not found at {weights_path}")
+        
+        # Estimate memory usage
+        memory_estimates = loader.estimate_memory_usage(weights_path)
+        required_ram = memory_estimates.get('streaming_load_gb', 16)
+        
+        if available_ram < required_ram:
+            logger.warning(f"RAM usage may be tight: {available_ram:.2f}GB available, {required_ram:.2f}GB estimated")
+        
+        # Use lazy loading for TTNN
+        logger.info("Starting lazy loading for TTNN...")
+        model_components = loader.lazy_load_for_ttnn(
+            weights_path=weights_path,
+            device_id=device_id,
+            batch_size=batch_size,
+            max_layers=model_args.n_layers
+        )
+        
+        device = model_components['device']
+        essential_weights = model_components['essential_weights']
+        layer_weights = model_components['layer_weights']
+        
+        logger.info(f"Loaded {len(essential_weights)} essential weights and {len(layer_weights)} layers")
+        
+        # Create filtered state dict from loaded components
+        filtered_state_dict = essential_weights.copy()
+        
+        # Add layer weights progressively to minimize memory peak
+        for layer_idx, layer_data in layer_weights.items():
+            filtered_state_dict.update(layer_data)
+            
+            # Force garbage collection every few layers
+            if layer_idx % 4 == 0:
+                gc.collect()
+                current_resources = check_system_resources()
+                logger.info(f"Loaded layer {layer_idx}, RAM usage: {current_resources.get('ram_usage_percent', 0):.1f}%")
+        
+        logger.info(f"Assembled filtered state dict with {len(filtered_state_dict)} parameters")
+
+        # Create embedding layer (lightweight)
+        class Emb(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.emb = torch.nn.Embedding(model_args.vocab_size, model_args.dim)
+
+            def forward(self, x):
+                return self.emb(x)
+
+        embd = Emb()
+        if "tok_embeddings.weight" in filtered_state_dict:
+            embd.load_state_dict({"emb.weight": filtered_state_dict["tok_embeddings.weight"]})
+            logger.info("Loaded embedding weights")
+            
+        # Set up rotation matrices with memory optimization
+        from models.demos.wormhole.ministral8b.tt.mistral_common import (
+            cache_attention,
+            freqs_to_rotation_matrix,
+            precompute_freqs,
+        )
+        
+        # Use smaller sequence length for rotation matrices to save memory
+        effective_seq_len = min(max_seq_len, 2048)  # Limit to reduce memory usage
+        logger.info(f"Precomputing rotation matrices for seq_len={effective_seq_len}")
+        
+        cos, sin = precompute_freqs(model_args.head_dim, effective_seq_len * 2)
+        rot_emb_matrix = freqs_to_rotation_matrix(cos, sin)
+        
+        # Create rotation matrix list with memory monitoring
+        rot_emb_matrix_list = []
+        for i in range(min(rot_emb_matrix.shape[0], effective_seq_len)):  # Limit to effective length
+            rot_tensor = ttnn.from_torch(
+                rot_emb_matrix[i, :, :].unsqueeze(0).unsqueeze(0), 
+                device=device, 
+                dtype=ttnn.bfloat8_b, 
+                layout=ttnn.TILE_LAYOUT
+            )
+            rot_emb_matrix_list.append(rot_tensor)
+            
+            # Monitor memory every 100 rotations
+            if (i + 1) % 100 == 0:
+                current_resources = check_system_resources()
+                if current_resources.get('ram_usage_percent', 0) > 90:
+                    logger.warning(f"High RAM usage detected: {current_resources.get('ram_usage_percent', 0):.1f}%")
+                    gc.collect()
+        
+        # Clear the original rotation matrix to save memory
+        del rot_emb_matrix, cos, sin
+        gc.collect()
+        
+        logger.info(f"Created {len(rot_emb_matrix_list)} rotation matrices")
+
+        # Cache attention with reduced scope to save memory
+        max_generated_tokens = min(120, max_seq_len // 4)  # Adaptive based on max_seq_len
+        logger.info(f"Caching attention for {max_generated_tokens} tokens")
+        
+        try:
+            cache_attention(device, filtered_state_dict, model_args, rot_emb_matrix_list, ttnn.bfloat8_b, max_generated_tokens)
+        except Exception as e:
+            logger.warning(f"Attention caching failed, proceeding without cache: {e}")
+
+        # Initialize the transformer model
+        logger.info("Creating TtTransformer model...")
+        model = TtTransformer(
+            args=model_args,
+            device=device,
+            dtype=ttnn.bfloat8_b,
+            state_dict=filtered_state_dict,
+            weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
+            layers=list(range(model_args.n_layers)),
+            rot_mat=rot_emb_matrix_list,
+            start_pos=0,
+        )
+
+        # Final memory cleanup
+        del filtered_state_dict, essential_weights, layer_weights
+        gc.collect()
+        
+        # Final memory status
+        final_resources = check_system_resources()
+        logger.info(f"Model loading completed - RAM usage: {final_resources.get('ram_usage_percent', 0):.1f}%")
+        logger.info(f"Available RAM: {final_resources.get('available_ram_gb', 0):.2f}GB")
+
+        return model, tokenizer
+
+    except Exception as e:
+        logger.error(f"Optimized model loading failed: {e}", exc_info=True)
+        # Cleanup on failure
+        gc.collect()
+        raise
 
 # Enhanced TTNN detection and hardware availability check
 def detect_ttnn_and_hardware():
