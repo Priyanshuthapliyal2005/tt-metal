@@ -20,6 +20,20 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import psutil
 from pathlib import Path
 
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Import performance monitoring
+try:
+    from performance_optimizer import performance_optimizer
+    from memory_efficient_loader import MemoryOptimizedLoader
+    PERFORMANCE_MONITORING_ENABLED = True
+    logger.info("🔥 Performance monitoring enabled")
+except ImportError as e:
+    logger.warning(f"Performance monitoring disabled: {e}")
+    PERFORMANCE_MONITORING_ENABLED = False
+
 # Configure logging first
 logging.basicConfig(
     level=os.environ.get('LOG_LEVEL', 'INFO'),
@@ -293,11 +307,68 @@ def check_model_weights_exist(cache_path):
     """Check if model weights exist in the cache path."""
     try:
         import os
-        required_files = ["config.json", "consolidated.bin"]
-        for file in required_files:
-            if not os.path.exists(os.path.join(cache_path, file)):
-                return False
-        return True
+        
+        # Check for essential configuration file (always needed)
+        config_file = os.path.join(cache_path, "config.json")
+        if not os.path.exists(config_file):
+            logger.warning(f"Missing essential config.json in {cache_path}")
+            return False
+        
+        # Check for model weight files in order of preference
+        possible_weight_files = [
+            # Consolidated format (from optimized download) - check first
+            "consolidated.bin",
+            # Safetensors format (preferred for HF downloads)
+            "model.safetensors",
+            "model.safetensors.index.json",
+            # PyTorch format (fallback for HF downloads)
+            "pytorch_model.bin",
+            "pytorch_model.bin.index.json"
+        ]
+        
+        logger.info(f"Checking for model weights in {cache_path}")
+        
+        for weight_file in possible_weight_files:
+            weight_path = os.path.join(cache_path, weight_file)
+            if os.path.exists(weight_path):
+                logger.info(f"✓ Found model weights: {weight_file}")
+                
+                # For consolidated.bin, also verify it's not empty and has reasonable size
+                if weight_file == "consolidated.bin":
+                    try:
+                        file_size = os.path.getsize(weight_path)
+                        size_gb = file_size / (1024**3)
+                        logger.info(f"  consolidated.bin size: {size_gb:.2f}GB")
+                        if file_size < 1024 * 1024:  # Less than 1MB is suspicious
+                            logger.warning(f"  consolidated.bin is suspiciously small: {file_size} bytes")
+                            continue
+                    except Exception as e:
+                        logger.warning(f"  Could not check consolidated.bin size: {e}")
+                        continue
+                
+                return True
+        
+        logger.warning(f"No model weight files found in {cache_path}")
+        logger.info(f"Searched for: {possible_weight_files}")
+        
+        # List actual files in cache path for debugging
+        try:
+            actual_files = os.listdir(cache_path)
+            logger.info(f"Actual files in cache: {actual_files}")
+            # Show file sizes for debugging
+            for filename in actual_files:
+                try:
+                    filepath = os.path.join(cache_path, filename)
+                    if os.path.isfile(filepath):
+                        size_mb = os.path.getsize(filepath) / (1024**2)
+                        logger.info(f"  {filename}: {size_mb:.2f}MB")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"Could not list cache directory: {e}")
+            
+        return False
+        
     except Exception as e:
         logger.error(f"Error checking model weights: {e}")
         return False
@@ -347,7 +418,8 @@ def preload_model():
     
     # Check if we're in Koyeb environment
     is_koyeb = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true'
-      # Set up model cache path
+    
+    # Set up model cache path
     cache_path = os.environ.get('MODEL_CACHE_PATH', '/workspace/model_cache')
     os.makedirs(cache_path, exist_ok=True)
     logger.info(f"Using model cache path: {cache_path}")
@@ -360,6 +432,8 @@ def preload_model():
         logger.error(f"Failed to import ttnn: {e}")
         if is_koyeb:
             logger.warning("Continuing server startup for health checks in Koyeb environment")
+            MODEL = "mock_model"
+            TOKENIZER = "mock_tokenizer"
             return False
         else:
             raise
@@ -369,32 +443,106 @@ def preload_model():
         lock_file = os.path.join(cache_path, 'downloading.lock')
         if os.path.exists(lock_file):
             logger.info("Model download in progress, will retry later...")
+            # Schedule retry in background thread
+            def retry_loading():
+                import time
+                time.sleep(30)  # Wait 30 seconds
+                if not os.path.exists(lock_file):  # Check if download finished
+                    logger.info("Retrying model loading after download completion...")
+                    # Retry loading and update globals if successful
+                    if preload_model():
+                        logger.info("Model successfully loaded in retry attempt")
+                    else:
+                        logger.warning("Model loading retry failed")
+            threading.Thread(target=retry_loading, daemon=True).start()
             return False
             
         if is_koyeb:
             logger.info("Setting up model loading for Koyeb environment")
-            # In Koyeb, we need to download the model first
+            # In Koyeb, check if model weights exist
             if not check_model_weights_exist(cache_path):
-                logger.info("Model weights not found, downloading from Hugging Face...")
-                # Start download in background
-                import subprocess
-                import sys
-                subprocess.Popen([
-                    sys.executable, 
-                    os.path.join(os.path.dirname(__file__), 'download_model.py')                ])
-                logger.info("Started model download in background")
-                return False
+                logger.info("Model weights not found, starting download...")
+                
+                # Use optimized download if available
+                try:
+                    from download_model_optimized import download_ministral_model_optimized
+                    logger.info("Using optimized download method...")
+                    download_success = download_ministral_model_optimized()
+                    if download_success:
+                        logger.info("Optimized download completed successfully")
+                    else:
+                        logger.error("Optimized download failed, trying fallback")
+                        # Try fallback download method
+                        import subprocess
+                        import sys
+                        logger.info("Trying fallback download method...")
+                        process = subprocess.Popen([
+                            sys.executable, 
+                            os.path.join(os.path.dirname(__file__), 'download_model.py')
+                        ])
+                        process.wait()  # Wait for download to complete
+                        
+                except ImportError:
+                    logger.warning("Optimized download not available, using fallback")
+                    import subprocess
+                    import sys
+                    logger.info("Using fallback download method...")
+                    process = subprocess.Popen([
+                        sys.executable, 
+                        os.path.join(os.path.dirname(__file__), 'download_model.py')
+                    ])
+                    process.wait()  # Wait for download to complete
+                
+                # Recheck if download completed successfully
+                if not check_model_weights_exist(cache_path):
+                    logger.error("Model download completed but weights still not found")
+                    MODEL = "mock_model"
+                    TOKENIZER = "mock_tokenizer"
+                    return False
+                else:
+                    logger.info("Model weights found after download")
             
             # Now load the model
             logger.info("Loading model from cache...")
-            MODEL, TOKENIZER = load_ministral_model_and_tokenizer_optimized()
-            return True
+            try:
+                MODEL, TOKENIZER = load_ministral_model_and_tokenizer_optimized()
+                if MODEL is not None and TOKENIZER is not None:
+                    logger.info("Model and tokenizer loaded successfully")
+                    return True
+                else:
+                    logger.error("Model loading returned None values")
+                    MODEL = "mock_model"
+                    TOKENIZER = "mock_tokenizer"
+                    return False
+            except Exception as load_error:
+                logger.error(f"Model loading failed: {load_error}", exc_info=True)
+                MODEL = "mock_model"
+                TOKENIZER = "mock_tokenizer"
+                return False
             
         else:
             # Local development with TT hardware
             logger.info("Setting up model loading for local development")
+            # Check if weights exist first
+            if not check_model_weights_exist(cache_path):
+                logger.info("Model weights not found in local environment, attempting download...")
+                try:
+                    from download_model_optimized import download_ministral_model_optimized
+                    download_success = download_ministral_model_optimized()
+                    if not download_success:
+                        logger.error("Failed to download model for local development")
+                        return False
+                except ImportError:
+                    logger.error("Cannot download model - optimized download not available")
+                    return False
+            
             MODEL, TOKENIZER = load_ministral_model_and_tokenizer_optimized()
-            return True
+            if MODEL is not None and TOKENIZER is not None:
+                logger.info("Model and tokenizer loaded successfully")
+                return True
+            else:
+                logger.error("Model loading failed in local environment")
+                return False
             
     except Exception as e:
         logger.error(f"Error in preload_model: {e}", exc_info=True)
@@ -402,7 +550,14 @@ def preload_model():
             logger.warning("Using mock model for Koyeb environment due to error")
             MODEL = "mock_model"
             TOKENIZER = "mock_tokenizer"
-            return True
+            return False
+        else:            raise
+        logger.error(f"Error in preload_model: {e}", exc_info=True)
+        if is_koyeb:
+            logger.warning("Using mock model for Koyeb environment due to error")
+            MODEL = "mock_model"
+            TOKENIZER = "mock_tokenizer"
+            return False
         else:
             raise
 
@@ -528,10 +683,10 @@ def load_ministral_model_and_tokenizer(device_id=0, batch_size=1, max_seq_len=51
 
 def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_seq_len=512, instruct=True):
     """
-    Memory-optimized loading of Ministral model and tokenizer.
-    Uses chunked loading and lazy initialization to minimize RAM usage.
+    Memory-optimized loading of Ministral model and tokenizer with performance monitoring.
+    Uses chunked loading, lazy initialization, and multi-device optimization to minimize RAM usage.
     """
-    logger.info(f"Loading Ministral-8B model (OPTIMIZED) with device_id={device_id}, batch_size={batch_size}, max_seq_len={max_seq_len}")
+    logger.info(f"🚀 Loading Ministral-8B model (OPTIMIZED) with device_id={device_id}, batch_size={batch_size}, max_seq_len={max_seq_len}")
 
     # Import memory-efficient loader
     try:
@@ -540,6 +695,12 @@ def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_
     except ImportError:
         logger.warning("Memory-efficient loader not available, falling back to standard loading")
         return load_ministral_model_and_tokenizer(device_id, batch_size, max_seq_len, instruct)
+    
+    # Performance monitoring context
+    monitor_context = None
+    if PERFORMANCE_MONITORING_ENABLED:
+        monitor_context = performance_optimizer.performance_monitor("Optimized Model Loading")
+        monitor_context.__enter__()
     
     # Check system resources
     resources = check_system_resources()
@@ -675,9 +836,7 @@ def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_
         try:
             cache_attention(device, filtered_state_dict, model_args, rot_emb_matrix_list, ttnn.bfloat8_b, max_generated_tokens)
         except Exception as e:
-            logger.warning(f"Attention caching failed, proceeding without cache: {e}")
-
-        # Initialize the transformer model
+            logger.warning(f"Attention caching failed, proceeding without cache: {e}")        # Initialize the transformer model
         logger.info("Creating TtTransformer model...")
         model = TtTransformer(
             args=model_args,
@@ -690,6 +849,17 @@ def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_
             start_pos=0,
         )
 
+        # Initialize embedding layer for the model
+        logger.info("Creating TT embedding layer...")
+        from models.demos.wormhole.ministral8b.tt.mistral_embedding import TtMistralEmbedding
+        tt_embd = TtMistralEmbedding(
+            device=device,
+            args=model_args,
+            weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
+            state_dict=filtered_state_dict,
+            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
+        )
+
         # Final memory cleanup
         del filtered_state_dict, essential_weights, layer_weights
         gc.collect()
@@ -697,8 +867,15 @@ def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_
         # Final memory status
         final_resources = check_system_resources()
         logger.info(f"Model loading completed - RAM usage: {final_resources.get('ram_usage_percent', 0):.1f}%")
-        logger.info(f"Available RAM: {final_resources.get('available_ram_gb', 0):.2f}GB")
-
+        logger.info(f"Available RAM: {final_resources.get('available_ram_gb', 0):.2f}GB")        # Store additional needed components in model object for later use
+        model._embd = embd  # PyTorch embedding for preprocessing
+        model._tt_embd = tt_embd  # TT embedding layer
+        model._rot_emb_matrix_list = rot_emb_matrix_list
+        model._device = device
+        model._args = model_args
+        
+        logger.info("Optimized model and tokenizer loaded successfully")
+        
         return model, tokenizer
 
     except Exception as e:
@@ -706,6 +883,13 @@ def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_
         # Cleanup on failure
         gc.collect()
         raise
+    finally:
+        # Properly close performance monitoring context
+        if monitor_context and PERFORMANCE_MONITORING_ENABLED:
+            try:
+                monitor_context.__exit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"Failed to close performance monitoring context: {e}")
 
 # Enhanced TTNN detection and hardware availability check
 def detect_ttnn_and_hardware():

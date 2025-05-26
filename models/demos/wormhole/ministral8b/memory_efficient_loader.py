@@ -10,51 +10,116 @@ import json
 import time
 import torch
 import logging
+import psutil
 from pathlib import Path
 from typing import Dict, Optional, Any, Generator, Tuple
 from contextlib import contextmanager
 import tempfile
+import safetensors.torch
+from huggingface_hub import hf_hub_download, snapshot_download
+import requests
+from tqdm import tqdm
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class MemoryOptimizedLoader:
-    """Memory-efficient loader for large language models."""
+    """Memory-efficient model loader optimized for TTNN hardware and large models."""
     
-    def __init__(self, cache_dir: str, chunk_size_mb: int = 512):
+    def __init__(self, cache_dir: str = "./model_cache", max_memory_gb: float = 16.0):
         """
         Initialize the memory-optimized loader.
         
         Args:
             cache_dir: Directory to store model cache
-            chunk_size_mb: Size of processing chunks in MB (default 512MB)
+            max_memory_gb: Maximum memory limit in GB (default 16GB)
         """
         self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.chunk_size_bytes = chunk_size_mb * 1024 * 1024
-        self.temp_dir = self.cache_dir / "temp"
-        self.temp_dir.mkdir(exist_ok=True)
+        self.cache_dir.mkdir(exist_ok=True)
+        self.max_memory_gb = max_memory_gb
+        self.logger = logging.getLogger(__name__)
         
+        # Performance tracking
+        self.metrics = {
+            'download_speed': [],
+            'loading_time': [],
+            'memory_peak': 0,
+            'device_utilization': {}
+        }
+        
+        # Multi-device optimization
+        self.device_config = self._detect_ttnn_devices()
+    
+    def _detect_ttnn_devices(self) -> Dict[str, Any]:
+        """Detect and configure TTNN devices for optimal utilization."""
+        try:
+            import ttnn
+            num_devices = ttnn.get_num_devices()
+            device_config = {
+                'num_devices': num_devices,
+                'devices': [],
+                'memory_per_device': {},
+                'optimal_sharding': num_devices > 1
+            }
+            
+            for i in range(num_devices):
+                try:
+                    device = ttnn.open_device(device_id=i)
+                    device_config['devices'].append(device)
+                    # Get device memory info if available
+                    device_config['memory_per_device'][i] = self._get_device_memory(device)
+                except Exception as e:
+                    self.logger.warning(f"Could not initialize TTNN device {i}: {e}")
+            
+            self.logger.info(f"TTNN Multi-device setup: {num_devices} devices detected")
+            return device_config
+            
+        except ImportError:
+            self.logger.warning("TTNN not available, using CPU fallback")
+            return {'num_devices': 0, 'devices': [], 'memory_per_device': {}, 'optimal_sharding': False}
+    
+    def _get_device_memory(self, device) -> Dict[str, float]:
+        """Get memory information for a TTNN device."""
+        try:
+            # This is a placeholder - replace with actual TTNN memory query
+            return {'total_gb': 8.0, 'available_gb': 7.5}  # Default values
+        except:
+            return {'total_gb': 8.0, 'available_gb': 7.5}
+    
     @contextmanager
-    def memory_monitor(self, operation_name: str):
-        """Context manager to monitor memory usage during operations."""
-        import psutil
-        process = psutil.Process()
+    def performance_monitor(self, operation_name: str):
+        """Enhanced performance monitoring with multi-device tracking."""
+        start_time = time.time()
+        start_memory = psutil.virtual_memory().used / (1024**3)
         
-        initial_memory = process.memory_info().rss / (1024**3)  # GB
-        logger.info(f"Starting {operation_name} - Initial memory: {initial_memory:.2f}GB")
+        # Monitor device utilization if TTNN available
+        device_start_metrics = {}
+        for i, device in enumerate(self.device_config['devices']):
+            device_start_metrics[i] = self._get_device_memory(device)
         
         try:
             yield
         finally:
-            # Force garbage collection
-            gc.collect()
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            end_time = time.time()
+            end_memory = psutil.virtual_memory().used / (1024**3)
+            peak_memory = max(start_memory, end_memory)
             
-            final_memory = process.memory_info().rss / (1024**3)  # GB
-            logger.info(f"Completed {operation_name} - Final memory: {final_memory:.2f}GB")
-            logger.info(f"Memory delta: {final_memory - initial_memory:+.2f}GB")
+            # Update metrics
+            duration = end_time - start_time
+            self.metrics['loading_time'].append(duration)
+            self.metrics['memory_peak'] = max(self.metrics['memory_peak'], peak_memory)
+            
+            # Device utilization tracking
+            for i, device in enumerate(self.device_config['devices']):
+                end_metrics = self._get_device_memory(device)
+                if i not in self.metrics['device_utilization']:
+                    self.metrics['device_utilization'][i] = []
+                
+                memory_used = device_start_metrics.get(i, {}).get('available_gb', 0) - end_metrics.get('available_gb', 0)
+                self.metrics['device_utilization'][i].append(memory_used)
+            
+            self.logger.info(f"{operation_name} completed in {duration:.2f}s, peak memory: {peak_memory:.2f}GB")
     
     def stream_download_file(self, url: str, destination: Path, resume: bool = True):
         """
@@ -85,7 +150,7 @@ class MemoryOptimizedLoader:
             headers['Range'] = f'bytes={downloaded_size}-'
             logger.info(f"Resuming download from byte {downloaded_size}")
         
-        with self.memory_monitor(f"downloading {destination.name}"):
+        with self.performance_monitor(f"downloading {destination.name}"):
             try:
                 response = requests.get(url, headers=headers, stream=True, timeout=30)
                 response.raise_for_status()
@@ -122,7 +187,7 @@ class MemoryOptimizedLoader:
         Yields:
             Tuple of (key, tensor) for each parameter
         """
-        with self.memory_monitor(f"streaming load {file_path.name}"):
+        with self.performance_monitor(f"streaming load {file_path.name}"):
             if file_path.suffix == '.safetensors':
                 from safetensors.torch import safe_open
                 
@@ -158,14 +223,14 @@ class MemoryOptimizedLoader:
         Returns:
             True if successful, False otherwise
         """
-        with self.memory_monitor("chunked weight processing"):
+        with self.performance_monitor("chunked weight processing"):
             try:
                 # Create temporary files for different parameter types
                 temp_files = {
-                    'embeddings': self.temp_dir / "embeddings.bin",
-                    'layers': self.temp_dir / "layers.bin", 
-                    'output': self.temp_dir / "output.bin",
-                    'norm': self.temp_dir / "norm.bin"
+                    'embeddings': self.cache_dir / "temp" / "embeddings.bin",
+                    'layers': self.cache_dir / "temp" / "layers.bin", 
+                    'output': self.cache_dir / "temp" / "output.bin",
+                    'norm': self.cache_dir / "temp" / "norm.bin"
                 }
                 
                 # Process each file and categorize parameters
@@ -255,7 +320,7 @@ class MemoryOptimizedLoader:
         Returns:
             Dictionary containing model components
         """
-        with self.memory_monitor("TTNN lazy loading"):
+        with self.performance_monitor("TTNN lazy loading"):
             try:
                 import ttnn
                 
