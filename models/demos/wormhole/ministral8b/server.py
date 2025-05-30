@@ -687,13 +687,6 @@ def preload_model():
             MODEL = "mock_model"
             TOKENIZER = "mock_tokenizer"
             return False
-        else:            raise
-        logger.error(f"Error in preload_model: {e}", exc_info=True)
-        if is_koyeb:
-            logger.warning("Using mock model for Koyeb environment due to error")
-            MODEL = "mock_model"
-            TOKENIZER = "mock_tokenizer"
-            return False
         else:
             raise
 
