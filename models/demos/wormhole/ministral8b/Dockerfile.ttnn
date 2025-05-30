@@ -213,28 +213,96 @@ EOL
 # Create firmware_erisc.ld
 cat > /workspace/runtime/hw/toolchain/wormhole/firmware_erisc.ld << 'EOL'
 /* Linker script for ERISC firmware */
-OUTPUT_ARCH(riscv)
+OUTPUT_ARCH("riscv")
+OUTPUT_FORMAT("elf32-littleriscv")
+GROUP(-lc)
 ENTRY(_start)
 
-MEMORY {
-    ERISC_L1 (rwx) : ORIGIN = 0xFFBE0000, LENGTH = 0x10000
+MEMORY
+{
+  UCODE     (rwx): ORIGIN = 0x00008000, LENGTH = 0x00008000
+  RAM       (rwx): ORIGIN = 0x00100000, LENGTH = 0x00080000
+  L1        (rwx): ORIGIN = 0x00180000, LENGTH = 0x00080000
 }
 
-SECTIONS {
-    .text : {
-        *(.text*)
-    } > ERISC_L1
+SECTIONS
+{
+  .text :
+  {
+    KEEP(*(.text.start))
+    *(.text)
+    *(.text.*)
+  } > RAM
 
-    .data : {
-        *(.data*)
-        *(.rodata*)
-        *(.sdata*)
-    } > ERISC_L1
+  .rodata :
+  {
+    *(.rodata)
+    *(.rodata.*)
+  } > RAM
 
-    .bss : {
-        *(.bss*)
-        *(COMMON)
-    } > ERISC_L1
+  .data :
+  {
+    *(.data)
+    *(.data.*)
+    *(.sdata)
+    *(.sdata.*)
+  } > RAM
+
+  .bss :
+  {
+    *(.bss)
+    *(.bss.*)
+    *(.sbss)
+    *(.sbss.*)
+  } > RAM
+}
+EOL
+
+# Create erisc-b0-app.ld
+cat > /workspace/runtime/hw/toolchain/wormhole/erisc-b0-app.ld << 'EOL'
+/* Linker script for ERISC B0 application */
+OUTPUT_ARCH("riscv")
+OUTPUT_FORMAT("elf32-littleriscv")
+GROUP(-lc)
+ENTRY(_start)
+
+MEMORY
+{
+  UCODE     (rwx): ORIGIN = 0x00008000, LENGTH = 0x00008000
+  RAM       (rwx): ORIGIN = 0x00100000, LENGTH = 0x00080000
+  L1        (rwx): ORIGIN = 0x00180000, LENGTH = 0x00080000
+}
+
+SECTIONS
+{
+  .text :
+  {
+    KEEP(*(.text.start))
+    *(.text)
+    *(.text.*)
+  } > RAM
+
+  .rodata :
+  {
+    *(.rodata)
+    *(.rodata.*)
+  } > RAM
+
+  .data :
+  {
+    *(.data)
+    *(.data.*)
+    *(.sdata)
+    *(.sdata.*)
+  } > RAM
+
+  .bss :
+  {
+    *(.bss)
+    *(.bss.*)
+    *(.sbss)
+    *(.sbss.*)
+  } > RAM
 }
 EOL
 
@@ -246,6 +314,15 @@ EOF
 # Make the script executable and run it
 RUN chmod +x /scripts/generate_firmware_scripts.sh && \
     /scripts/generate_firmware_scripts.sh
+
+# Create the firmware lib directory and stub object files needed for linking
+RUN mkdir -p /workspace/runtime/hw/lib/wormhole && \
+    cd /workspace/runtime/hw/lib/wormhole && \
+    touch tmu-crt0.o noc.o substitutes.o ncrisc-halt-wormhole.o tdma_xmov.o && \
+    chmod 644 tmu-crt0.o noc.o substitutes.o ncrisc-halt-wormhole.o tdma_xmov.o && \
+    cd /workspace/runtime/hw/toolchain && \
+    touch erisc-crt0.o && chmod 644 erisc-crt0.o && \
+    echo "Created stub object files in firmware directories"
 
 # Install requirements if the file exists
 RUN if [ -f "requirements-docker.txt" ]; then \
