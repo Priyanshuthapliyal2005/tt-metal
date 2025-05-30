@@ -49,6 +49,7 @@ ENV ENVIRONMENT=production
 ENV IS_DOCKER_ENVIRONMENT=true
 ENV MODEL_CACHE_PATH=/workspace/model_cache
 ENV HF_HOME=/workspace/huggingface
+ENV LDFLAGS="-L/workspace/runtime/hw/lib/wormhole -lerisc"
 
 # Health check - just check if the server is running
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
@@ -322,7 +323,22 @@ RUN mkdir -p /workspace/runtime/hw/lib/wormhole && \
     chmod 644 tmu-crt0.o noc.o substitutes.o ncrisc-halt-wormhole.o tdma_xmov.o && \
     cd /workspace/runtime/hw/toolchain && \
     touch erisc-crt0.o && chmod 644 erisc-crt0.o && \
-    echo "Created stub object files in firmware directories"
+    mkdir -p /workspace/runtime/hw/lib/wormhole/erisc && \
+    cd /workspace/runtime/hw/lib/wormhole/erisc && \
+    echo "void __erisc_jump_table() {}" > erisc_jump_table.c && \
+    echo "void l1_to_local_mem_copy(unsigned long* dst, unsigned long* src, long size) {}" > l1_mem_copy.c && \
+    echo "void kernel_init(unsigned long arg) {}" > kernel_init.c && \
+    echo "unsigned long __ldm_bss_end = 0;" > ldm_bss.c && \
+    echo "unsigned long __ldm_bss_start = 0;" >> ldm_bss.c && \
+    echo "void wzerorange() {}" > wzerorange.c && \
+    gcc -c -o erisc_jump_table.o erisc_jump_table.c && \
+    gcc -c -o l1_mem_copy.o l1_mem_copy.c && \
+    gcc -c -o kernel_init.o kernel_init.c && \
+    gcc -c -o ldm_bss.o ldm_bss.c && \
+    gcc -c -o wzerorange.o wzerorange.c && \
+    ar rcs liberisc.a erisc_jump_table.o l1_mem_copy.o kernel_init.o ldm_bss.o wzerorange.o && \
+    cp liberisc.a /workspace/runtime/hw/lib/wormhole/ && \
+    echo "Created ERISC stub library with missing symbols"
 
 # Install requirements if the file exists
 RUN if [ -f "requirements-docker.txt" ]; then \

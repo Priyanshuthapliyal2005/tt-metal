@@ -57,6 +57,11 @@ BATCH_SIZE = 1
 MAX_SEQ_LEN = 512
 INSTRUCT_MODE = True
 
+# Model loading state management
+MODEL_LOADING_EVENT = threading.Event()
+MODEL_LOADED = False
+MODEL_LOADING_CHECK_INTERVAL = 30  # seconds
+
 class ModelRequestHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the Ministral-8B model API."""
     
@@ -410,7 +415,12 @@ def download_model_weights(cache_path):
 
 def preload_model():
     """Preload model into memory."""
-    global MODEL, TOKENIZER
+    global MODEL, TOKENIZER, MODEL_LOADED
+    
+    # If model is already loaded, return early
+    if MODEL_LOADED and MODEL != "mock_model" and MODEL is not None:
+        logger.info("Model already loaded, skipping preload")
+        return True
     
     logger.info("Preloading model into memory...")
     
@@ -427,6 +437,7 @@ def preload_model():
         # Set mock model and retry later
         MODEL = "mock_model"
         TOKENIZER = "mock_tokenizer"
+        MODEL_LOADED = False
         return False
     
     # Check hardware status from TTNN_STATUS
@@ -498,6 +509,7 @@ def preload_model():
                 MODEL, TOKENIZER = load_ministral_model_and_tokenizer_optimized()
                 if MODEL is not None and TOKENIZER is not None:
                     logger.info("Model loaded successfully with hardware acceleration")
+                    MODEL_LOADED = True
                     return True
             except Exception as e:
                 logger.error(f"Hardware-accelerated loading failed: {e}")
@@ -511,6 +523,7 @@ def preload_model():
             MODEL, TOKENIZER = load_ministral_model_and_tokenizer()
             if MODEL is not None and TOKENIZER is not None:
                 logger.info("Model loaded successfully with standard loader")
+                MODEL_LOADED = True
                 return True
         except Exception as e:
             logger.error(f"Standard loader failed: {e}")
@@ -1131,6 +1144,53 @@ def process_question(question, batch_size=1, max_seq_len=128, device_id=0, instr
         except Exception as fallback_error:
             return f"Both TTNN and HF fallback failed. Question: '{question[:50]}...' Error: {str(e)} Fallback error: {str(fallback_error)}"
 
+def background_model_loader():
+    """Background thread that periodically checks if model download has completed and loads the model."""
+    global MODEL, TOKENIZER, MODEL_LOADED
+    
+    logger.info("Starting background model loader thread")
+    
+    while not MODEL_LOADING_EVENT.is_set():
+        # Check if model is already loaded
+        if MODEL_LOADED:
+            logger.info("Model already loaded, background loader stopping")
+            return
+            
+        # Check if mock model - needs real loading
+        if MODEL == "mock_model" or MODEL is None:
+            cache_path = os.environ.get('MODEL_CACHE_PATH', '/workspace/model_cache')
+            lock_file = os.path.join(cache_path, 'downloading.lock')
+            
+            # Check if download is still in progress
+            if os.path.exists(lock_file):
+                logger.info("Model download still in progress, checking again later...")
+            else:
+                # Check if model files exist
+                if check_model_weights_exist(cache_path):
+                    logger.info("Model download completed, loading model now...")
+                    try:
+                        # Attempt to load the model
+                        success = preload_model()
+                        if success:
+                            MODEL_LOADED = True
+                            logger.info("✅ Model successfully loaded by background loader")
+                        else:
+                            logger.warning("⚠️ Background loader failed to load model, will retry later")
+                    except Exception as e:
+                        logger.error(f"Error in background model loading: {e}")
+                        logger.error(traceback.format_exc())
+                else:
+                    logger.warning("Download appears complete (no lock file) but model files not found")
+        else:
+            # Model seems to be loaded already
+            MODEL_LOADED = True
+            logger.info("Model appears to be loaded already, background loader stopping")
+            return
+            
+        # Wait before checking again
+        MODEL_LOADING_EVENT.wait(MODEL_LOADING_CHECK_INTERVAL)
+
+
 def run_server(port=None, preload=True):
     """Run the HTTP server."""
     global SERVER_START_TIME
@@ -1141,8 +1201,11 @@ def run_server(port=None, preload=True):
         port = int(os.environ.get('PORT', 8000))  # Default to 8000 for Koyeb
     
     if preload:
-        # Preload model in a separate thread
-        threading.Thread(target=preload_model).start()
+        # Initial preload attempt
+        threading.Thread(target=preload_model, daemon=True).start()
+        
+        # Start background loader thread to periodically check and load model
+        threading.Thread(target=background_model_loader, daemon=True).start()
     
     server_address = ("", port)
     httpd = HTTPServer(server_address, ModelRequestHandler)
