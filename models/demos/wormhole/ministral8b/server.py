@@ -376,13 +376,48 @@ def check_model_weights_exist(cache_path):
 def download_model_weights(cache_path):
     """Download model weights from Hugging Face."""
     try:
-        # Import the download function
+        logger.info("=== DOWNLOADING MODEL WEIGHTS ===")
+        # Check cache path before download
+        logger.info(f"Cache path: {cache_path}")
+        if os.path.exists(cache_path):
+            logger.info(f"Cache directory exists, contents: {os.listdir(cache_path)}")
+        else:
+            logger.info(f"Cache directory doesn't exist, creating: {cache_path}")
+            os.makedirs(cache_path, exist_ok=True)
+            
+        # Import the download function with better error handling
         try:
-            from download_model import download_ministral_model
-        except ImportError as e:
-            logger.error(f"Failed to import download_model: {e}")
-            logger.error(f"Current sys.path: {sys.path}")
-            logger.error(f"Current directory contents: {os.listdir(os.path.dirname(os.path.abspath(__file__)))}")
+            logger.info("Importing download_model module...")
+            # First try relative import
+            try:
+                from download_model import download_ministral_model
+                logger.info("Successfully imported download_model via relative import")
+            except ImportError as e1:
+                logger.error(f"Relative import failed: {e1}")
+                # Try with absolute path
+                try:
+                    import sys
+                    download_module_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'download_model.py')
+                    logger.info(f"Looking for download module at: {download_module_path}")
+                    if os.path.exists(download_module_path):
+                        logger.info("Download module file exists")
+                        # Add directory to path
+                        if os.path.dirname(download_module_path) not in sys.path:
+                            sys.path.append(os.path.dirname(download_module_path))
+                        import download_model
+                        download_ministral_model = download_model.download_ministral_model
+                        logger.info("Successfully imported download_model via absolute path")
+                    else:
+                        logger.error("Download module file doesn't exist at expected path")
+                        return False
+                except ImportError as e2:
+                    logger.error(f"All import attempts failed: {e2}")
+                    logger.error(f"Current sys.path: {sys.path}")
+                    logger.error(f"Current directory contents: {os.listdir(os.path.dirname(os.path.abspath(__file__)))}")
+                    return False
+        except Exception as e:
+            logger.error(f"Unexpected error during import: {e}")
+            logger.error(traceback.format_exc())
             return False
             
         logger.info(f"Attempting to download model weights to {cache_path}")
@@ -414,29 +449,72 @@ def preload_model():
     """Preload model into memory."""
     global MODEL, TOKENIZER
     
+    logger.info("===== PRELOAD MODEL START =====")
     logger.info("Preloading model into memory...")
+    
+    # Debug environment variables
+    env_vars = {
+        'IS_KOYEB_ENVIRONMENT': os.environ.get('IS_KOYEB_ENVIRONMENT'),
+        'MODEL_CACHE_PATH': os.environ.get('MODEL_CACHE_PATH'),
+        'HF_HOME': os.environ.get('HF_HOME'),
+        'PYTHONPATH': os.environ.get('PYTHONPATH'),
+        'TT_METAL_HOME': os.environ.get('TT_METAL_HOME')
+    }
+    logger.info(f"Environment variables: {env_vars}")
     
     # Check if we're in Koyeb environment
     is_koyeb = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true'
+    logger.info(f"Running in Koyeb environment: {is_koyeb}")
     
     # Set up model cache path
     cache_path = os.environ.get('MODEL_CACHE_PATH', '/workspace/model_cache')
     os.makedirs(cache_path, exist_ok=True)
     logger.info(f"Using model cache path: {cache_path}")
     
+    # Debug: List cache directory contents if it exists
+    if os.path.exists(cache_path):
+        try:
+            logger.info(f"Cache directory contents: {os.listdir(cache_path)}")
+        except Exception as e:
+            logger.error(f"Error listing cache directory: {e}")
+    
     try:
-        # Try to import ttnn
-        import ttnn
-        logger.info("TTNN imported successfully")
-    except ImportError as e:
-        logger.error(f"Failed to import ttnn: {e}")
-        if is_koyeb:
-            logger.warning("Continuing server startup for health checks in Koyeb environment")
-            MODEL = "mock_model"
-            TOKENIZER = "mock_tokenizer"
-            return False
-        else:
-            raise
+        # Try to import ttnn with detailed error reporting
+        logger.info("Attempting to import TTNN module...")
+        try:
+            import ttnn
+            logger.info(f"TTNN imported successfully. Version: {ttnn.__version__ if hasattr(ttnn, '__version__') else 'unknown'}")
+            # Check for TTNN device availability
+            try:
+                num_devices = ttnn.get_num_available_devices()
+                logger.info(f"TTNN devices available: {num_devices}")
+                if num_devices > 0:
+                    for i in range(num_devices):
+                        try:
+                            device_info = ttnn.get_device_info(device_id=i)
+                            logger.info(f"Device {i} info: {device_info}")
+                        except Exception as device_err:
+                            logger.error(f"Error getting device {i} info: {device_err}")
+            except Exception as dev_err:
+                logger.error(f"Error checking TTNN devices: {dev_err}")
+        except ImportError as e:
+            # Log detailed import error information
+            logger.error(f"Failed to import ttnn: {e}")
+            logger.error(f"Python path: {sys.path}")
+            # List module directory if possible
+            try:
+                import site
+                logger.error(f"Site packages: {site.getsitepackages()}")
+            except Exception:
+                pass
+            
+            if is_koyeb:
+                logger.warning("Continuing server startup for health checks in Koyeb environment")
+                MODEL = "mock_model"
+                TOKENIZER = "mock_tokenizer"
+                return False
+            else:
+                raise
     
     try:
         # Check for lock file first
@@ -502,20 +580,78 @@ def preload_model():
                 else:
                     logger.info("Model weights found after download")
             
-            # Now load the model
-            logger.info("Loading model from cache...")
+            # Now load the model with detailed debugging
+            logger.info("=== LOADING MODEL FROM CACHE ===")
+            # List available model loading functions
+            logger.info("Available model loading functions:")
+            logger.info(f"- load_ministral_model_and_tokenizer: {load_ministral_model_and_tokenizer.__doc__ if hasattr(load_ministral_model_and_tokenizer, '__doc__') else 'No docstring'}")
+            logger.info(f"- load_ministral_model_and_tokenizer_optimized: {load_ministral_model_and_tokenizer_optimized.__doc__ if hasattr(load_ministral_model_and_tokenizer_optimized, '__doc__') else 'No docstring'}")
+            
             try:
-                MODEL, TOKENIZER = load_ministral_model_and_tokenizer_optimized()
-                if MODEL is not None and TOKENIZER is not None:
-                    logger.info("Model and tokenizer loaded successfully")
-                    return True
-                else:
-                    logger.error("Model loading returned None values")
-                    MODEL = "mock_model"
-                    TOKENIZER = "mock_tokenizer"
-                    return False
+                # Check Python memory usage before loading
+                import psutil
+                process = psutil.Process(os.getpid())
+                before_mem = process.memory_info().rss / (1024 * 1024)
+                logger.info(f"Memory usage before model loading: {before_mem:.2f} MB")
+                
+                # Try the optimized loader first
+                logger.info("Attempting to load with optimized loader...")
+                try:
+                    MODEL, TOKENIZER = load_ministral_model_and_tokenizer_optimized()
+                    # Check what was loaded
+                    logger.info(f"MODEL type: {type(MODEL)}")
+                    logger.info(f"TOKENIZER type: {type(TOKENIZER)}")
+                    
+                    if MODEL is not None and TOKENIZER is not None:
+                        logger.info("Model and tokenizer loaded successfully with optimized loader")
+                        # Check memory after loading
+                        after_mem = process.memory_info().rss / (1024 * 1024)
+                        logger.info(f"Memory usage after model loading: {after_mem:.2f} MB (increased by {after_mem - before_mem:.2f} MB)")
+                        return True
+                    else:
+                        logger.error("Optimized loader returned None values, trying standard loader...")
+                        # Try standard loader as fallback
+                        try:
+                            MODEL, TOKENIZER = load_ministral_model_and_tokenizer()
+                            if MODEL is not None and TOKENIZER is not None:
+                                logger.info("Model and tokenizer loaded successfully with standard loader")
+                                return True
+                            else:
+                                logger.error("Both loaders failed to return valid model and tokenizer")
+                                MODEL = "mock_model"
+                                TOKENIZER = "mock_tokenizer"
+                                return False
+                        except Exception as std_load_error:
+                            logger.error(f"Standard model loading failed: {std_load_error}")
+                            logger.error(traceback.format_exc())
+                            MODEL = "mock_model"
+                            TOKENIZER = "mock_tokenizer"
+                            return False
+                except Exception as opt_load_error:
+                    logger.error(f"Optimized model loading failed: {opt_load_error}")
+                    logger.error(traceback.format_exc())
+                    
+                    # Try standard loader as fallback
+                    logger.info("Attempting to load with standard loader as fallback...")
+                    try:
+                        MODEL, TOKENIZER = load_ministral_model_and_tokenizer()
+                        if MODEL is not None and TOKENIZER is not None:
+                            logger.info("Model and tokenizer loaded successfully with standard loader")
+                            return True
+                        else:
+                            logger.error("Standard loader returned None values")
+                            MODEL = "mock_model"
+                            TOKENIZER = "mock_tokenizer"
+                            return False
+                    except Exception as std_load_error:
+                        logger.error(f"Standard model loading failed: {std_load_error}")
+                        logger.error(traceback.format_exc())
+                        MODEL = "mock_model"
+                        TOKENIZER = "mock_tokenizer"
+                        return False
             except Exception as load_error:
-                logger.error(f"Model loading failed: {load_error}", exc_info=True)
+                logger.error(f"Model loading process failed: {load_error}")
+                logger.error(traceback.format_exc())
                 MODEL = "mock_model"
                 TOKENIZER = "mock_tokenizer"
                 return False
@@ -956,10 +1092,35 @@ def process_question(question, batch_size=1, max_seq_len=128, device_id=0, instr
     try:
         # Import TTNN and required modules for inference
         import ttnn
-        from transformers import AutoTokenizer
-        from models.demos.wormhole.ministral8b.tt.mistral_common import (
-            sample, prepare_inputs_ttnn, prepare_inputs_ttnn_prefill
-        )
+        # Ensure we have the proper tokenizer imports
+        try:
+            from transformers import AutoTokenizer
+            # Import the mistral common functions with better error handling
+            try:
+                from models.demos.wormhole.ministral8b.tt.mistral_common import (
+                    sample, prepare_inputs_ttnn, prepare_inputs_ttnn_prefill
+                )
+                logger.info("Successfully imported mistral_common functions")
+            except ImportError as e:
+                logger.error(f"Error importing mistral_common functions: {e}")
+                # Try alternate import paths
+                try:
+                    # Try with absolute import path
+                    import sys
+                    logger.info(f"Current sys.path: {sys.path}")
+                    # Add the current directory to the path if needed
+                    if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+                        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+                    from tt.mistral_common import (
+                        sample, prepare_inputs_ttnn, prepare_inputs_ttnn_prefill
+                    )
+                    logger.info("Successfully imported mistral_common functions via alternate path")
+                except ImportError as e2:
+                    logger.error(f"Failed all attempts to import mistral_common: {e2}")
+                    raise
+        except ImportError as e:
+            logger.error(f"Error importing AutoTokenizer: {e}")
+            raise
         
         # Use existing model and tokenizer from server's global state
         global MODEL, TOKENIZER
