@@ -4,6 +4,10 @@
 # Stage 1: Use official TT-Metalium Docker image as base
 FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc AS ttnn-base
 
+# Add HF_TOKEN argument and environment variable for Hugging Face authentication
+ARG HF_TOKEN
+ENV HF_TOKEN=$HF_TOKEN
+
 # Set working directory
 WORKDIR /workspace
 
@@ -355,8 +359,8 @@ RUN if [ -f "requirements-docker.txt" ]; then \
 RUN chmod +x /workspace/models/demos/wormhole/ministral8b/server.py && \
     [ -f "/workspace/models/demos/wormhole/ministral8b/test_server.py" ] && chmod +x /workspace/models/demos/wormhole/ministral8b/test_server.py || true
 
-# Create a startup script that starts the server immediately and downloads the model in the background
-RUN echo '#!/bin/bash\n\n# Start the download in the background\npython /workspace/models/demos/wormhole/ministral8b/download_model.py &\n\n# Start the server immediately\npython /workspace/models/demos/wormhole/ministral8b/server.py --port 8000' > /startup.sh \
+# Create a startup script that starts the server immediately in foreground and downloads in background
+RUN echo '#!/bin/bash\n\n# Start the server immediately in foreground to bind port 8000\n# The server will handle background downloads internally via model_manager\nexec python /workspace/models/demos/wormhole/ministral8b/server.py --port 8000' > /startup.sh \
 && chmod +x /startup.sh
 
 # Default command

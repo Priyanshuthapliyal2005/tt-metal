@@ -27,17 +27,19 @@ logger = logging.getLogger(__name__)
 class MemoryOptimizedLoader:
     """Memory-efficient model loader optimized for TTNN hardware and large models."""
     
-    def __init__(self, cache_dir: str = "./model_cache", max_memory_gb: float = 16.0):
+    def __init__(self, cache_dir: str = "./model_cache", max_memory_gb: float = 16.0, chunk_size_mb: int = 256):
         """
         Initialize the memory-optimized loader.
         
         Args:
             cache_dir: Directory to store model cache
             max_memory_gb: Maximum memory limit in GB (default 16GB)
+            chunk_size_mb: Chunk size in MB for downloads and processing (default 256MB)
         """
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
         self.max_memory_gb = max_memory_gb
+        self.chunk_size_mb = chunk_size_mb
         self.logger = logging.getLogger(__name__)
         
         # Performance tracking
@@ -158,9 +160,10 @@ class MemoryOptimizedLoader:
                 total_size = int(response.headers.get('content-length', 0)) + downloaded_size
                 
                 mode = 'ab' if downloaded_size > 0 else 'wb'
+                chunk_size_bytes = self.chunk_size_mb * 1024 * 1024
                 with open(destination, mode) as f:
                     downloaded = downloaded_size
-                    for chunk in response.iter_content(chunk_size=8192):
+                    for chunk in response.iter_content(chunk_size=min(8192, chunk_size_bytes)):
                         if chunk:
                             f.write(chunk)
                             downloaded += len(chunk)
@@ -467,7 +470,7 @@ if __name__ == "__main__":
     
     # Initialize memory-efficient loader
     cache_dir = os.environ.get('MODEL_CACHE_PATH', '/tmp/ministral8b_cache')
-    loader = MemoryOptimizedLoader(cache_dir, chunk_size_mb=256)
+    loader = MemoryOptimizedLoader(cache_dir)
     
     # Example model file (replace with actual path)
     model_file = Path(cache_dir) / "consolidated.bin"

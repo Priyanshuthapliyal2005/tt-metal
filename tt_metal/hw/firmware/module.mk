@@ -9,7 +9,7 @@ endif
 hw/firmware:
 	TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C linker_scripts
 	TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C linker_scripts
-	$(info firmware/module.mk: Erisc build is skipped for wormhole_b0 currently)
+	$(ERISC_MAKE)
 
 hw/firmware/clean:
-	$(info firmware/module.mk: Erisc build is skipped for wormhole_b0 currently)
+	$(ERISC_MAKE_CLEAN)
