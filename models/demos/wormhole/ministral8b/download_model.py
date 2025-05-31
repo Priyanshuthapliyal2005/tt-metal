@@ -121,76 +121,75 @@ def download_ministral_model():
             logger.info("✓ Successfully logged into Hugging Face")
         except Exception as e:
             logger.error(f"✗ Failed to login to Hugging Face: {e}")
-            return False
-        
+            return False        
         # Initialize HF API
         api = HfApi(token=hf_token)
         model_name = os.environ.get("MODEL_NAME", "mistralai/Ministral-8B-Instruct-2410")
-            logger.info(f"Fetching model files list for {model_name}...")
-            
-            # Get all files in the model repo
-            model_info = api.model_info(model_name, token=hf_token)
-            files_to_download = []
-            
-            # Filter out unnecessary files and patterns
-            ignore_patterns = ["*.md", "*.bin.index.json", "*.h5", "*.ot", "*.msgpack"]
-            
-            for file_info in model_info.siblings:
-                filename = file_info.rfilename
-                if not any(filename.endswith(p.replace("*", "")) for p in ignore_patterns):
-                    files_to_download.append(filename)
-            
-            if not files_to_download:
-                logger.error("No files to download found in the model repository")
-                return False
-            
-            logger.info(f"Found {len(files_to_download)} files to download")
-            
-            # Download each file with resume support
-            for filename in files_to_download:
-                file_url = f"https://huggingface.co/{model_name}/resolve/main/{filename}"
-                dest_file = weights_dir / filename
-                
-                # Create parent directories if they don't exist
-                dest_file.parent.mkdir(parents=True, exist_ok=True)
-                
-                logger.info(f"Downloading {filename}...")
-                try:
-                    download_file_with_resume(file_url, dest_file, hf_token)
-                    logger.info(f"✓ Downloaded {filename}")
-                except Exception as e:
-                    logger.error(f"✗ Failed to download {filename}: {e}")
-                    # Continue with other files even if one fails
-                    continue
-            
-            # Verify key files exist
-            required_files = [
-                "config.json",
-                "tokenizer.json",
-                "tokenizer_config.json",
-            ]
-            
-            # Check for either safetensors or pytorch model files
-            has_weights = any(weights_dir.glob("*.safetensors")) or any(weights_dir.glob("pytorch_model*.bin"))
-            
-            missing_files = []
-            for file in required_files:
-                if not (weights_dir / file).exists() and not list(weights_dir.glob(f"*{file}")):
-                    missing_files.append(file)
-            
-            if missing_files:
-                logger.warning(f"⚠ Warning: Missing required files: {missing_files}")
-            if not has_weights:
-                logger.warning("⚠ Warning: No model weight files found (expected .safetensors or .bin files)")
-            
-            if not missing_files and has_weights:
-                logger.info("✓ All required files downloaded successfully")
-                
-                # Convert to consolidated format if needed
-                conversion_success = convert_to_consolidated_format(weights_dir)
-                return conversion_success
-                
+        logger.info(f"Fetching model files list for {model_name}...")
+        
+        # Get all files in the model repo
+        model_info = api.model_info(model_name, token=hf_token)
+        files_to_download = []
+          # Filter out unnecessary files and patterns
+        ignore_patterns = ["*.md", "*.bin.index.json", "*.h5", "*.ot", "*.msgpack"]
+        
+        for file_info in model_info.siblings:
+            filename = file_info.rfilename
+            if not any(filename.endswith(p.replace("*", "")) for p in ignore_patterns):
+                files_to_download.append(filename)
+        
+        if not files_to_download:
+            logger.error("No files to download found in the model repository")
             return False
+        
+        logger.info(f"Found {len(files_to_download)} files to download")
+        
+        # Download each file with resume support
+        for filename in files_to_download:
+            file_url = f"https://huggingface.co/{model_name}/resolve/main/{filename}"
+            dest_file = weights_dir / filename
+            
+            # Create parent directories if they don't exist
+            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"Downloading {filename}...")
+            try:
+                download_file_with_resume(file_url, dest_file, hf_token)
+                logger.info(f"✓ Downloaded {filename}")
+            except Exception as e:
+                logger.error(f"✗ Failed to download {filename}: {e}")
+                # Continue with other files even if one fails
+                continue
+        
+        # Verify key files exist
+        required_files = [
+            "config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+        ]
+        
+        # Check for either safetensors or pytorch model files
+        has_weights = any(weights_dir.glob("*.safetensors")) or any(weights_dir.glob("pytorch_model*.bin"))
+        
+        missing_files = []
+        for file in required_files:
+            if not (weights_dir / file).exists() and not list(weights_dir.glob(f"*{file}")):
+                missing_files.append(file)
+        
+        if missing_files:
+            logger.warning(f"⚠ Warning: Missing required files: {missing_files}")
+        
+        if not has_weights:
+            logger.warning("⚠ Warning: No model weight files found (expected .safetensors or .bin files)")
+        
+        if not missing_files and has_weights:
+            logger.info("✓ All required files downloaded successfully")
+            
+            # Convert to consolidated format if needed
+            conversion_success = convert_to_consolidated_format(weights_dir)
+            return conversion_success
+            
+        return False
             
     except Exception as e:
         logger.error(f"✗ Error during download: {str(e)}", exc_info=True)

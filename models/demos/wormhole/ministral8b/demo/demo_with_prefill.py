@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.ministral8b.reference.tokenizer import Tokenizer
 from models.demos.wormhole.ministral8b.tt.mistral_common import (
     cache_attention,
     freqs_to_rotation_matrix,

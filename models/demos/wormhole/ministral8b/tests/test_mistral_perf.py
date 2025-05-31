@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.ministral8b.reference.tokenizer import Tokenizer
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     freqs_to_rotation_matrix,
     precompute_freqs,

@@ -5,7 +5,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.ministral8b.reference.tokenizer import Tokenizer
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull

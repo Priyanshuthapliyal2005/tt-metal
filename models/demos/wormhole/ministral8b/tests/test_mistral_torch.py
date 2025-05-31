@@ -4,7 +4,7 @@
 import torch
 
 from models.demos.wormhole.mistral7b.reference.model import Transformer
-from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.ministral8b.reference.tokenizer import Tokenizer
 
 # import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import precompute_freqs

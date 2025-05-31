@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.wormhole.mistral7b.reference.model import Transformer, precompute_freqs_cis
-from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.ministral8b.reference.tokenizer import Tokenizer
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
