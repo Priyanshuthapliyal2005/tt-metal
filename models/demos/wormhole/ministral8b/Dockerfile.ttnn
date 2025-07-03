@@ -18,6 +18,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     curl \
     build-essential \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
@@ -25,12 +26,9 @@ COPY models/demos/wormhole/ministral8b/requirements-docker.txt /workspace/requir
 COPY models/demos/wormhole/ministral8b/requirements.txt /workspace/requirements.txt
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-docker.txt \
-    && pip install --no-cache-dir \
-        huggingface-hub>=0.19.0 \
-        tqdm>=4.66.0 \
-        requests>=2.31.0 \
-        safetensors>=0.3.0
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-docker.txt && \
+    pip install --no-cache-dir --upgrade pydantic && \
+    pip install --no-cache-dir git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
 
 # Stage 2: Application setup
 FROM ttnn-base AS app

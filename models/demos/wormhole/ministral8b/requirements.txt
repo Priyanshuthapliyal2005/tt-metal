@@ -29,7 +29,7 @@ uvicorn>=0.24.0
 prometheus-client>=0.17.0
 
 # Version-flexible dependencies to handle Python version differences
-pydantic>=1.10.0,<2.0.0  # Avoids pydantic-core issues
+# pydantic>=1.10.0,<2.0.0  # Avoids pydantic-core issues
 
 # Development and testing dependencies
 pytest>=7.4.0
