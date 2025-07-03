@@ -1,9 +1,14 @@
 # Ministral-8B Koyeb Requirements
 # Python dependencies compatible with both 3.10 (runtime) and 3.11 (build)
+# Updated for tt-transformers framework compatibility
+
+# tt-transformers framework dependencies
+git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
+transformers==4.53.0
+protobuf==3.20.0
 
 # Core dependencies with version constraints for compatibility
 torch>=2.0.0,<=2.2.0
-transformers>=4.38.0
 huggingface_hub>=0.21.0
 tokenizers>=0.15.0
 numpy>=1.24.3
@@ -25,3 +30,21 @@ prometheus-client>=0.17.0
 
 # Version-flexible dependencies to handle Python version differences
 pydantic>=1.10.0,<2.0.0  # Avoids pydantic-core issues
+
+# Development and testing dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-benchmark>=4.0.0
+pytest-cov>=4.1.0
+
+# Performance profiling and benchmarking
+memory-profiler>=0.61.0
+line-profiler>=4.1.0
+py-spy>=0.3.14
+
+# YAML parsing (for SOC descriptor handling)
+PyYAML>=6.0.1
+
+# Additional utilities for tt-transformers integration
+safetensors>=0.4.0
+datasets>=2.14.0

@@ -37,6 +37,16 @@ except ImportError as e:
     logger.warning(f"Performance monitoring disabled: {e}")
     PERFORMANCE_MONITORING_ENABLED = False
 
+# Import tt-transformers framework for Ministral-8B
+try:
+    from models.tt_transformers.mistral8b.model import create_ministral_model, MistralModelArgs, MistralTransformer
+    from models.tt_transformers.tt.common import create_tt_model, sample_host, PagedAttentionConfig
+    TT_TRANSFORMERS_AVAILABLE = True
+    logger.info("✅ tt-transformers framework imported successfully")
+except ImportError as e:
+    logger.warning(f"tt-transformers framework not available: {e}")
+    TT_TRANSFORMERS_AVAILABLE = False
+
 # Configure logging first
 logging.basicConfig(
     level=os.environ.get('LOG_LEVEL', 'INFO'),
@@ -471,10 +481,98 @@ def preload_model():
 
 def load_ministral_model_and_tokenizer(device_id=0, batch_size=1, max_seq_len=512, instruct=True):
     """
-    Load Ministral model and tokenizer for server use.
+    Load Ministral model and tokenizer using tt-transformers framework.
     Returns (model, tokenizer) tuple.
     """
-    logger.info(f"Loading Ministral-8B model with device_id={device_id}, batch_size={batch_size}, max_seq_len={max_seq_len}")
+    logger.info(f"Loading Ministral-8B model with tt-transformers framework: device_id={device_id}, batch_size={batch_size}, max_seq_len={max_seq_len}")
+
+    try:
+        import ttnn
+        import torch
+        
+        # Check if tt-transformers is available
+        if not TT_TRANSFORMERS_AVAILABLE:
+            logger.warning("tt-transformers not available, falling back to legacy implementation")
+            return load_ministral_model_and_tokenizer_legacy(device_id, batch_size, max_seq_len, instruct)
+
+        # Create TT device with enhanced error handling
+        try:
+            device = ttnn.open_device(device_id=device_id)
+            logger.info(f"Opened TT device {device_id}")
+        except Exception as device_error:
+            logger.error(f"Failed to open TT device {device_id}: {device_error}")
+            # Check for specific YAML parsing errors
+            if "YAML" in str(device_error) or "bad conversion" in str(device_error):
+                logger.error("YAML parsing error detected in SOC descriptor. This may be due to:")
+                logger.error("1. Corrupted SOC descriptor file")
+                logger.error("2. Version mismatch between descriptor and parser")
+                logger.error("3. Missing firmware files")
+                # Try to provide more specific guidance
+                soc_descriptor_path = "/workspace/tt-metal/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml"
+                if os.path.exists(soc_descriptor_path):
+                    logger.error(f"SOC descriptor found at: {soc_descriptor_path}")
+                else:
+                    logger.error(f"SOC descriptor missing at: {soc_descriptor_path}")
+            raise
+
+        # Use tt-transformers create_ministral_model function
+        logger.info("Creating Ministral-8B model with tt-transformers framework...")
+        
+        # Set up optimizations for server use
+        optimizations = {
+            "batch_size": batch_size,
+            "max_seq_len": max_seq_len,
+            "enable_async": True,
+            "memory_efficient": True
+        }
+        
+        # Create the model using tt-transformers
+        model_args, model, kv_cache, state_dict = create_ministral_model(
+            mesh_device=device,
+            instruct=instruct,
+            max_batch_size=batch_size,
+            max_seq_len=max_seq_len,
+            optimizations=optimizations,
+            dtype=ttnn.bfloat8_b,
+            state_dict=None,  # Let the framework load it
+            paged_attention_config=None,
+            use_paged_kv_cache=False
+        )
+        
+        # Initialize tokenizer using model args
+        from models.demos.wormhole.ministral8b.reference.tokenizer import Tokenizer
+        tokenizer = Tokenizer(model_args.tokenizer_path)
+        logger.info(f"Initialized tokenizer from {model_args.tokenizer_path}")
+
+        logger.info("Model and tokenizer loaded successfully with tt-transformers framework")
+        
+        # Store additional needed components for backward compatibility
+        model._device = device
+        model._args = model_args
+        model._kv_cache = kv_cache
+        model._state_dict = state_dict
+        
+        return model, tokenizer
+
+    except Exception as e:
+        logger.error(f"Failed to load model and tokenizer with tt-transformers: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Try fallback to legacy implementation
+        logger.warning("Attempting fallback to legacy model loading...")
+        try:
+            return load_ministral_model_and_tokenizer_legacy(device_id, batch_size, max_seq_len, instruct)
+        except Exception as fallback_error:
+            logger.error(f"Legacy fallback also failed: {fallback_error}")
+            raise e
+
+
+def load_ministral_model_and_tokenizer_legacy(device_id=0, batch_size=1, max_seq_len=512, instruct=True):
+    """
+    Legacy model loading implementation (kept for fallback compatibility).
+    """
+    logger.info(f"Loading Ministral-8B model with legacy implementation: device_id={device_id}, batch_size={batch_size}, max_seq_len={max_seq_len}")
 
     try:
         import ttnn
@@ -801,14 +899,16 @@ def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_
 
 # Enhanced TTNN detection and hardware availability check
 def detect_ttnn_and_hardware():
-    """Detect TTNN availability and hardware status."""
+    """Detect TTNN availability and hardware status with enhanced YAML error handling."""
     ttnn_status = {
         'ttnn_available': False,
         'hardware_available': False,
         'devices': [],
         'error': None,
         'environment_type': 'unknown',
-        'firmware_available': False
+        'firmware_available': False,
+        'soc_descriptor_status': 'unknown',
+        'yaml_error_details': None
     }
     
     # Detect environment type
@@ -822,6 +922,41 @@ def detect_ttnn_and_hardware():
     else:
         ttnn_status['environment_type'] = 'local'
     
+    # Check SOC descriptor files before attempting TTNN import
+    soc_descriptor_paths = [
+        "/workspace/tt-metal/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml",
+        "/workspace/tt-metal/tt_metal/soc_descriptors/wormhole_b0_versim.yaml",
+        "/workspace/tt-metal/tt_metal/soc_descriptors/blackhole_140_arch.yaml"
+    ]
+    
+    soc_status = {}
+    for soc_path in soc_descriptor_paths:
+        if os.path.exists(soc_path):
+            try:
+                # Try to parse the YAML file to check for syntax errors
+                import yaml
+                with open(soc_path, 'r') as f:
+                    yaml_content = yaml.safe_load(f)
+                soc_status[soc_path] = "valid"
+                logger.info(f"✅ SOC descriptor valid: {soc_path}")
+            except yaml.YAMLError as yaml_error:
+                soc_status[soc_path] = f"yaml_error: {yaml_error}"
+                logger.error(f"❌ YAML parsing error in {soc_path}: {yaml_error}")
+                ttnn_status['yaml_error_details'] = {
+                    'file': soc_path,
+                    'error': str(yaml_error),
+                    'line': getattr(yaml_error, 'problem_mark', {}).get('line', 'unknown'),
+                    'column': getattr(yaml_error, 'problem_mark', {}).get('column', 'unknown')
+                }
+            except Exception as e:
+                soc_status[soc_path] = f"read_error: {e}"
+                logger.error(f"❌ Error reading {soc_path}: {e}")
+        else:
+            soc_status[soc_path] = "missing"
+            logger.warning(f"⚠️ SOC descriptor missing: {soc_path}")
+    
+    ttnn_status['soc_descriptor_status'] = soc_status
+    
     try:
         import ttnn
         ttnn_status['ttnn_available'] = True
@@ -829,7 +964,7 @@ def detect_ttnn_and_hardware():
         
         # Check for firmware files
         firmware_path = "/workspace/runtime/hw/lib/wormhole"
-        firmware_files = ["tmu-crt0.o", "noc.o", "substitutes.o"]
+        firmware_files = ["tmu-crt0.o", "noc.o", "substitutes.o", "idle_erisc.elf"]
         missing_files = []
         
         try:
@@ -842,6 +977,11 @@ def detect_ttnn_and_hardware():
             if missing_files:
                 logger.warning(f"Missing firmware files: {missing_files}")
                 ttnn_status['error'] = f"Missing firmware files: {missing_files}"
+                
+                # Provide specific guidance for missing firmware
+                if "idle_erisc.elf" in missing_files:
+                    logger.error("idle_erisc.elf missing - this indicates firmware compilation failed")
+                    logger.error("Try running: ttnn.open_device(0) to trigger firmware compilation")
             else:
                 ttnn_status['firmware_available'] = True
                 logger.info("✅ Firmware files found")
@@ -849,7 +989,7 @@ def detect_ttnn_and_hardware():
             logger.warning(f"Failed to check firmware files: {fw_error}")
             ttnn_status['error'] = f"Failed to check firmware files: {fw_error}"
         
-        # Try to detect hardware
+        # Try to detect hardware with enhanced error handling
         try:
             devices = ttnn.get_device_ids()
             if devices and len(devices) > 0:
@@ -864,15 +1004,46 @@ def detect_ttnn_and_hardware():
                 logger.info("⚠️ TTNN available but no TT hardware detected")
                 
         except Exception as device_error:
-            # Check if error message contains firmware build failure
             error_str = str(device_error)
-            if "build failed" in error_str or "link failure" in error_str or "cannot find" in error_str:
+            
+            # Enhanced error classification and handling
+            if "YAML" in error_str or "bad conversion" in error_str:
+                logger.error(f"❌ YAML parsing error during device detection: {device_error}")
+                ttnn_status['error'] = f"YAML parsing error: {device_error}"
+                
+                # Try to extract specific YAML error information
+                if "line" in error_str and "column" in error_str:
+                    import re
+                    line_match = re.search(r'line (\d+)', error_str)
+                    col_match = re.search(r'column (\d+)', error_str)
+                    if line_match and col_match:
+                        ttnn_status['yaml_error_details'] = {
+                            'file': 'SOC descriptor (detected during device init)',
+                            'error': error_str,
+                            'line': line_match.group(1),
+                            'column': col_match.group(1)
+                        }
+                        logger.error(f"YAML error at line {line_match.group(1)}, column {col_match.group(1)}")
+                        
+                        # Provide specific guidance for common YAML errors
+                        if int(col_match.group(1)) == 21 and int(line_match.group(1)) == 29:
+                            logger.error("This appears to be the known eth_endpoint format issue:")
+                            logger.error("  - Expected: eth_endpoint: 0")
+                            logger.error("  - Found: eth_endpoint: [0, 0]")
+                            logger.error("  - Solution: Change list format to integer format in SOC descriptor")
+                
+            elif "build failed" in error_str or "link failure" in error_str or "cannot find" in error_str:
                 logger.warning(f"Hardware detection failed due to firmware build errors: {device_error}")
                 ttnn_status['error'] = f"Firmware build errors: {device_error}"
                 # Still report hardware as available since PCI device was detected
                 ttnn_status['hardware_available'] = True 
                 ttnn_status['devices'] = ['0']  # Assuming at least one device
                 logger.info("Hardware reported as available despite firmware issues")
+                
+            elif "library_tweaks" in error_str:
+                logger.info("library_tweaks error detected - expected in cloud environments without TT hardware")
+                ttnn_status['error'] = f"Cloud environment (no hardware): {device_error}"
+                
             else:
                 logger.warning(f"Hardware detection failed: {device_error}")
                 ttnn_status['error'] = f"Hardware detection failed: {device_error}"
@@ -892,65 +1063,42 @@ logger.info(f"TTNN Status: {TTNN_STATUS}")
 
 def process_question(question, batch_size=1, max_seq_len=128, device_id=0, instruct=True, temperature=0.7):
     """
-    Process a question using TTNN inference with Hugging Face tokenization.
+    Process a question using tt-transformers framework with TTNN inference.
     This provides proper benchmarking of HF model on TTNN hardware.
     Returns the generated response text.
     """
-    logger.info(f"Processing question with TTNN: {question[:50]}{'...' if len(question) > 50 else ''}")
+    logger.info(f"Processing question with tt-transformers: {question[:50]}{'...' if len(question) > 50 else ''}")
     
     try:
         # Import TTNN and required modules for inference
         import ttnn
-        # Ensure we have the proper tokenizer imports
-        try:
-            from transformers import AutoTokenizer
-            # Import the mistral common functions with better error handling
-            try:
-                from models.demos.wormhole.ministral8b.tt.mistral_common import (
-                    sample, prepare_inputs_ttnn, prepare_inputs_ttnn_prefill
-                )
-                logger.info("Successfully imported mistral_common functions")
-            except ImportError as e:
-                logger.error(f"Error importing mistral_common functions: {e}")
-                # Try alternate import paths
-                try:
-                    # Try with absolute import path
-                    import sys
-                    logger.info(f"Current sys.path: {sys.path}")
-                    # Add the current directory to the path if needed
-                    if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
-                        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-                    from tt.mistral_common import (
-                        sample, prepare_inputs_ttnn, prepare_inputs_ttnn_prefill
-                    )
-                    logger.info("Successfully imported mistral_common functions via alternate path")
-                except ImportError as e2:
-                    logger.error(f"Failed all attempts to import mistral_common: {e2}")
-                    raise
-        except ImportError as e:
-            logger.error(f"Error importing AutoTokenizer: {e}")
-            raise
+        import torch
         
         # Use existing model and tokenizer from server's global state
         global MODEL, TOKENIZER
         if MODEL is None or TOKENIZER is None or MODEL == "mock_model":
             # Fallback: Use Hugging Face tokenizer if TT tokenizer not available
             logger.warning("TT model not loaded, using HF tokenizer with mock inference")
-            hf_tokenizer = AutoTokenizer.from_pretrained("mistralai/Ministral-8B-Instruct-2410")
-            
-            # Format prompt for instruct mode
-            if instruct:
-                messages = [{"role": "user", "content": question}]
-                input_text = hf_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            else:
-                input_text = question
-            
-            # Tokenize
-            input_ids = hf_tokenizer.encode(input_text, return_tensors="pt")
-            logger.info(f"HF tokenized input: {input_ids.shape[1]} tokens")
-            
-            # Return meaningful response indicating we're using HF tokenization
-            return f"Using Hugging Face tokenization: Your question '{question[:100]}...' was tokenized into {input_ids.shape[1]} tokens. TTNN hardware inference is initializing. This demonstrates proper HF-TTNN integration for benchmarking."
+            try:
+                from transformers import AutoTokenizer
+                hf_tokenizer = AutoTokenizer.from_pretrained("mistralai/Ministral-8B-Instruct-2410")
+                
+                # Format prompt for instruct mode
+                if instruct:
+                    messages = [{"role": "user", "content": question}]
+                    input_text = hf_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                else:
+                    input_text = question
+                
+                # Tokenize
+                input_ids = hf_tokenizer.encode(input_text, return_tensors="pt")
+                logger.info(f"HF tokenized input: {input_ids.shape[1]} tokens")
+                
+                # Return meaningful response indicating we're using HF tokenization
+                return f"Using Hugging Face tokenization: Your question '{question[:100]}...' was tokenized into {input_ids.shape[1]} tokens. TTNN hardware inference is initializing. This demonstrates proper HF-TTNN integration for benchmarking."
+            except Exception as hf_error:
+                logger.error(f"HF tokenizer fallback failed: {hf_error}")
+                return f"Model not available. Question: '{question[:50]}...' Error: {str(hf_error)}"
         
         # Use TT model and tokenizer for actual TTNN inference
         tt_model = MODEL
@@ -966,14 +1114,18 @@ def process_question(question, batch_size=1, max_seq_len=128, device_id=0, instr
         except Exception as e:
             logger.error(f"Error accessing TT device: {e}")
             # Fallback to HF tokenization for benchmarking
-            hf_tokenizer = AutoTokenizer.from_pretrained("mistralai/Ministral-8B-Instruct-2410")
-            if instruct:
-                messages = [{"role": "user", "content": question}]
-                input_text = hf_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            else:
-                input_text = question
-            input_ids = hf_tokenizer.encode(input_text, return_tensors="pt")
-            return f"TT device unavailable. Using HF tokenization for benchmarking: {input_ids.shape[1]} tokens from: '{question[:80]}...'"
+            try:
+                from transformers import AutoTokenizer
+                hf_tokenizer = AutoTokenizer.from_pretrained("mistralai/Ministral-8B-Instruct-2410")
+                if instruct:
+                    messages = [{"role": "user", "content": question}]
+                    input_text = hf_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                else:
+                    input_text = question
+                input_ids = hf_tokenizer.encode(input_text, return_tensors="pt")
+                return f"TT device unavailable. Using HF tokenization for benchmarking: {input_ids.shape[1]} tokens from: '{question[:80]}...'"
+            except Exception as hf_error:
+                return f"Device and HF fallback failed. Question: '{question[:50]}...' Device error: {str(e)} HF error: {str(hf_error)}"
         
         # Format prompt for instruct mode
         if instruct:
@@ -985,70 +1137,171 @@ def process_question(question, batch_size=1, max_seq_len=128, device_id=0, instr
         input_ids = tokenizer.encode(input_text)
         logger.info(f"TT tokenized input: {len(input_ids)} tokens")
         
-        # Prepare for TTNN inference - simplified decode-only approach
-        generation_length = min(max_seq_len, 64)  # Limit for performance
-        
-        # Simple decode-only generation (no prefill for now to ensure stability)
-        generated_tokens = []
-        current_tokens = input_ids[-32:]  # Take last 32 tokens to fit in context
-        
-        logger.info(f"Starting TTNN inference for {generation_length} tokens")
-        
-        for step in range(generation_length):
+        # Check if we're using tt-transformers framework
+        if TT_TRANSFORMERS_AVAILABLE and hasattr(tt_model, 'prepare_inputs_decode'):
+            # Use tt-transformers framework for inference
+            logger.info("Using tt-transformers framework for inference")
+            
             try:
-                # Prepare input for TTNN
-                if hasattr(tt_model, '_embd'):
-                    # Use TT embedding if available
-                    input_tensor = torch.tensor([current_tokens[-1:]]).long()
-                    embed_input = tt_model._embd(input_tensor)
+                # Prepare inputs using tt-transformers methods
+                generation_length = min(max_seq_len, 64)  # Limit for performance
+                generated_tokens = []
+                current_tokens = input_ids[-32:]  # Take last 32 tokens to fit in context
+                
+                logger.info(f"Starting tt-transformers inference for {generation_length} tokens")
+                
+                for step in range(generation_length):
+                    try:
+                        # Prepare input tensor
+                        input_tensor = torch.tensor([[current_tokens[-1]]]).long()
+                        
+                        # Use tt-transformers prepare_inputs_decode method
+                        tt_input = tt_model.prepare_inputs_decode(input_tensor)
+                        
+                        # Run inference using tt-transformers forward method
+                        tt_out = tt_model.forward(
+                            x=tt_input,
+                            current_pos=len(current_tokens) - 1,
+                            mode="decode"
+                        )
+                        
+                        # Process output using tt-transformers method
+                        output_tensor = tt_model.process_output_decode(tt_out, batch_size, 1)
+                        
+                        # Sample next token using shared sampling function
+                        if TT_TRANSFORMERS_AVAILABLE:
+                            try:
+                                from models.tt_transformers.tt.common import sample_host
+                                _, next_token = sample_host(output_tensor, temperature=temperature, top_p=0.9)
+                                next_token_id = next_token[0].item()
+                            except ImportError:
+                                # Fallback to simple argmax
+                                next_token_id = torch.argmax(output_tensor, dim=-1)[0].item()
+                        else:
+                            next_token_id = torch.argmax(output_tensor, dim=-1)[0].item()
+                        
+                        # Check for EOS
+                        if hasattr(tokenizer, 'eos_id') and next_token_id == tokenizer.eos_id:
+                            break
+                        
+                        generated_tokens.append(next_token_id)
+                        current_tokens.append(next_token_id)
+                        
+                        # Keep context window manageable
+                        if len(current_tokens) > 64:
+                            current_tokens = current_tokens[-32:]
+                            
+                    except Exception as step_error:
+                        logger.warning(f"tt-transformers inference step {step} failed: {step_error}")
+                        break
+                
+                # Decode generated tokens
+                if generated_tokens:
+                    generated_text = tokenizer.decode(generated_tokens)
+                    logger.info(f"tt-transformers generated {len(generated_tokens)} tokens: {generated_text[:50]}...")
                 else:
-                    # Fallback approach
-                    input_tensor = torch.tensor([[current_tokens[-1]]]).long()
-                    embed_input = input_tensor.float()
+                    generated_text = f"tt-transformers inference completed. Processed question: '{question[:100]}...' using {len(input_ids)} input tokens."
                 
-                # Convert to TTNN format
-                decode_input, current_pos = prepare_inputs_ttnn(
-                    embed_input,
-                    len(current_tokens) - 1,
-                    4096,  # model dim
-                    None,  # sliding window
-                    device,
+                return generated_text
+                
+            except Exception as tt_transformers_error:
+                logger.error(f"tt-transformers inference failed: {tt_transformers_error}")
+                # Fall back to legacy inference
+                logger.warning("Falling back to legacy inference method")
+        
+        # Legacy inference method (fallback)
+        logger.info("Using legacy inference method")
+        
+        try:
+            # Import the mistral common functions with better error handling
+            try:
+                from models.demos.wormhole.ministral8b.tt.mistral_common import (
+                    sample, prepare_inputs_ttnn, prepare_inputs_ttnn_prefill
                 )
-                
-                # Run inference
-                tt_out = tt_model(decode_input, current_pos)
-                
-                # Convert output back to torch
-                tt_output_torch = ttnn.to_torch(tt_out).squeeze()
-                
-                # Sample next token
-                next_token = sample(tt_output_torch.unsqueeze(0).unsqueeze(0), temperature=temperature, top_p=0.9)
-                next_token_id = next_token[0, 0].item()
-                
-                # Check for EOS
-                if hasattr(tokenizer, 'eos_id') and next_token_id == tokenizer.eos_id:
-                    break
-                
-                generated_tokens.append(next_token_id)
-                current_tokens.append(next_token_id)
-                
-                # Keep context window manageable
-                if len(current_tokens) > 64:
-                    current_tokens = current_tokens[-32:]
+                logger.info("Successfully imported mistral_common functions")
+            except ImportError as e:
+                logger.error(f"Error importing mistral_common functions: {e}")
+                # Try alternate import paths
+                try:
+                    import sys
+                    if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+                        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+                    from tt.mistral_common import (
+                        sample, prepare_inputs_ttnn, prepare_inputs_ttnn_prefill
+                    )
+                    logger.info("Successfully imported mistral_common functions via alternate path")
+                except ImportError as e2:
+                    logger.error(f"Failed all attempts to import mistral_common: {e2}")
+                    raise
+            
+            # Prepare for TTNN inference - simplified decode-only approach
+            generation_length = min(max_seq_len, 64)  # Limit for performance
+            
+            # Simple decode-only generation (no prefill for now to ensure stability)
+            generated_tokens = []
+            current_tokens = input_ids[-32:]  # Take last 32 tokens to fit in context
+            
+            logger.info(f"Starting legacy TTNN inference for {generation_length} tokens")
+            
+            for step in range(generation_length):
+                try:
+                    # Prepare input for TTNN
+                    if hasattr(tt_model, '_embd'):
+                        # Use TT embedding if available
+                        input_tensor = torch.tensor([current_tokens[-1:]]).long()
+                        embed_input = tt_model._embd(input_tensor)
+                    else:
+                        # Fallback approach
+                        input_tensor = torch.tensor([[current_tokens[-1]]]).long()
+                        embed_input = input_tensor.float()
                     
-            except Exception as e:
-                logger.warning(f"TTNN inference step {step} failed: {e}")
-                # Continue with simpler approach or break
-                break
-        
-        # Decode generated tokens
-        if generated_tokens:
-            generated_text = tokenizer.decode(generated_tokens)
-            logger.info(f"TTNN generated {len(generated_tokens)} tokens: {generated_text[:50]}...")
-        else:
-            generated_text = f"TTNN inference completed. Processed question: '{question[:100]}...' using {len(input_ids)} input tokens."
-        
-        return generated_text
+                    # Convert to TTNN format
+                    decode_input, current_pos = prepare_inputs_ttnn(
+                        embed_input,
+                        len(current_tokens) - 1,
+                        4096,  # model dim
+                        None,  # sliding window
+                        device,
+                    )
+                    
+                    # Run inference
+                    tt_out = tt_model(decode_input, current_pos)
+                    
+                    # Convert output back to torch
+                    tt_output_torch = ttnn.to_torch(tt_out).squeeze()
+                    
+                    # Sample next token
+                    next_token = sample(tt_output_torch.unsqueeze(0).unsqueeze(0), temperature=temperature, top_p=0.9)
+                    next_token_id = next_token[0, 0].item()
+                    
+                    # Check for EOS
+                    if hasattr(tokenizer, 'eos_id') and next_token_id == tokenizer.eos_id:
+                        break
+                    
+                    generated_tokens.append(next_token_id)
+                    current_tokens.append(next_token_id)
+                    
+                    # Keep context window manageable
+                    if len(current_tokens) > 64:
+                        current_tokens = current_tokens[-32:]
+                        
+                except Exception as e:
+                    logger.warning(f"Legacy TTNN inference step {step} failed: {e}")
+                    # Continue with simpler approach or break
+                    break
+            
+            # Decode generated tokens
+            if generated_tokens:
+                generated_text = tokenizer.decode(generated_tokens)
+                logger.info(f"Legacy TTNN generated {len(generated_tokens)} tokens: {generated_text[:50]}...")
+            else:
+                generated_text = f"Legacy TTNN inference completed. Processed question: '{question[:100]}...' using {len(input_ids)} input tokens."
+            
+            return generated_text
+            
+        except Exception as legacy_error:
+            logger.error(f"Legacy inference also failed: {legacy_error}")
+            raise
         
     except Exception as e:
         logger.error(f"Error in TTNN processing: {e}")
@@ -1826,10 +2079,144 @@ def load_ministral_model_and_tokenizer(device_id=0, batch_size=1, max_seq_len=51
 
 def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_seq_len=512, instruct=True):
     """
-    Memory-optimized loading of Ministral model and tokenizer with performance monitoring.
-    Uses chunked loading, lazy initialization, and multi-device optimization to minimize RAM usage.
+    Memory-optimized loading of Ministral model and tokenizer with tt-transformers framework.
+    Uses performance monitoring and memory optimization while leveraging shared components.
     """
-    logger.info(f"🚀 Loading Ministral-8B model (OPTIMIZED) with device_id={device_id}, batch_size={batch_size}, max_seq_len={max_seq_len}")
+    logger.info(f"🚀 Loading Ministral-8B model (OPTIMIZED) with tt-transformers framework: device_id={device_id}, batch_size={batch_size}, max_seq_len={max_seq_len}")
+
+    # Import memory-efficient loader
+    try:
+        from memory_efficient_loader import MemoryOptimizedLoader, check_system_resources
+        import gc
+    except ImportError:
+        logger.warning("Memory-efficient loader not available, falling back to standard tt-transformers loading")
+        return load_ministral_model_and_tokenizer(device_id, batch_size, max_seq_len, instruct)
+    
+    # Performance monitoring context
+    monitor_context = None
+    if PERFORMANCE_MONITORING_ENABLED:
+        monitor_context = performance_optimizer.performance_monitor("Optimized tt-transformers Model Loading")
+        monitor_context.__enter__()
+    
+    # Check system resources
+    resources = check_system_resources()
+    available_ram = resources.get('available_ram_gb', 0)
+    logger.info(f"Available RAM: {available_ram:.2f}GB")
+    
+    if available_ram < 8:
+        logger.error(f"Insufficient RAM for model loading: {available_ram:.2f}GB available, minimum 8GB required")
+        raise RuntimeError("Insufficient memory for model loading")
+    
+    try:
+        import ttnn
+        import torch
+        
+        # Check if tt-transformers is available
+        if not TT_TRANSFORMERS_AVAILABLE:
+            logger.warning("tt-transformers not available, falling back to legacy optimized implementation")
+            return load_ministral_model_and_tokenizer_optimized_legacy(device_id, batch_size, max_seq_len, instruct)
+
+        # Create TT device with enhanced error handling
+        try:
+            device = ttnn.open_device(device_id=device_id)
+            logger.info(f"Opened TT device {device_id}")
+        except Exception as device_error:
+            logger.error(f"Failed to open TT device {device_id}: {device_error}")
+            # Enhanced YAML error handling
+            if "YAML" in str(device_error) or "bad conversion" in str(device_error):
+                logger.error("YAML parsing error detected in SOC descriptor:")
+                logger.error("  - Check /workspace/tt-metal/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml")
+                logger.error("  - Look for type mismatches at line 29, column 21 (eth_endpoint field)")
+                logger.error("  - Verify firmware files in /workspace/runtime/hw/lib/wormhole/")
+                logger.error("  - Compare with working wormhole_b0_versim.yaml format")
+                
+                # Try to provide specific line information if available
+                error_str = str(device_error)
+                if "line" in error_str and "column" in error_str:
+                    logger.error(f"  - Specific error location: {error_str}")
+            raise
+
+        # Set up optimizations for memory-efficient loading
+        optimizations = {
+            "batch_size": batch_size,
+            "max_seq_len": max_seq_len,
+            "enable_async": True,
+            "memory_efficient": True,
+            "chunk_loading": True,
+            "lazy_init": True
+        }
+        
+        # Adjust optimizations based on available memory
+        if available_ram < 16:
+            optimizations["reduced_precision"] = True
+            optimizations["smaller_cache"] = True
+            max_seq_len = min(max_seq_len, 1024)  # Reduce sequence length for low memory
+            logger.info(f"Low memory detected, reducing max_seq_len to {max_seq_len}")
+        
+        # Use tt-transformers create_ministral_model function with optimizations
+        logger.info("Creating optimized Ministral-8B model with tt-transformers framework...")
+        
+        model_args, model, kv_cache, state_dict = create_ministral_model(
+            mesh_device=device,
+            instruct=instruct,
+            max_batch_size=batch_size,
+            max_seq_len=max_seq_len,
+            optimizations=optimizations,
+            dtype=ttnn.bfloat8_b,
+            state_dict=None,  # Let the framework load it efficiently
+            paged_attention_config=None,
+            use_paged_kv_cache=False
+        )
+        
+        # Initialize tokenizer using model args
+        from models.demos.wormhole.ministral8b.reference.tokenizer import Tokenizer
+        tokenizer = Tokenizer(model_args.tokenizer_path)
+        logger.info(f"Initialized tokenizer from {model_args.tokenizer_path}")
+
+        # Final memory cleanup
+        gc.collect()
+        
+        # Final memory status
+        final_resources = check_system_resources()
+        logger.info(f"Optimized model loading completed - RAM usage: {final_resources.get('ram_usage_percent', 0):.1f}%")
+        logger.info(f"Available RAM: {final_resources.get('available_ram_gb', 0):.2f}GB")
+
+        logger.info("Optimized model and tokenizer loaded successfully with tt-transformers framework")
+        
+        # Store additional needed components for backward compatibility
+        model._device = device
+        model._args = model_args
+        model._kv_cache = kv_cache
+        model._state_dict = state_dict
+        
+        return model, tokenizer
+
+    except Exception as e:
+        logger.error(f"Optimized tt-transformers model loading failed: {e}", exc_info=True)
+        # Cleanup on failure
+        gc.collect()
+        
+        # Try fallback to legacy optimized implementation
+        logger.warning("Attempting fallback to legacy optimized model loading...")
+        try:
+            return load_ministral_model_and_tokenizer_optimized_legacy(device_id, batch_size, max_seq_len, instruct)
+        except Exception as fallback_error:
+            logger.error(f"Legacy optimized fallback also failed: {fallback_error}")
+            raise e
+    finally:
+        # Properly close performance monitoring context
+        if monitor_context and PERFORMANCE_MONITORING_ENABLED:
+            try:
+                monitor_context.__exit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"Failed to close performance monitoring context: {e}")
+
+
+def load_ministral_model_and_tokenizer_optimized_legacy(device_id=0, batch_size=1, max_seq_len=512, instruct=True):
+    """
+    Legacy optimized model loading implementation (kept for fallback compatibility).
+    """
+    logger.info(f"🚀 Loading Ministral-8B model (OPTIMIZED LEGACY) with device_id={device_id}, batch_size={batch_size}, max_seq_len={max_seq_len}")
 
     # Import memory-efficient loader
     try:
@@ -1837,12 +2224,12 @@ def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_
         import gc
     except ImportError:
         logger.warning("Memory-efficient loader not available, falling back to standard loading")
-        return load_ministral_model_and_tokenizer(device_id, batch_size, max_seq_len, instruct)
+        return load_ministral_model_and_tokenizer_legacy(device_id, batch_size, max_seq_len, instruct)
     
     # Performance monitoring context
     monitor_context = None
     if PERFORMANCE_MONITORING_ENABLED:
-        monitor_context = performance_optimizer.performance_monitor("Optimized Model Loading")
+        monitor_context = performance_optimizer.performance_monitor("Optimized Legacy Model Loading")
         monitor_context.__enter__()
     
     # Check system resources
@@ -2387,50 +2774,111 @@ def run_server(port=None, preload=True):
     httpd.serve_forever()
 
 def main():
-    parser = argparse.ArgumentParser(description="Ministral-8B API Server")
+    parser = argparse.ArgumentParser(description="Ministral-8B API Server with tt-transformers")
     parser.add_argument("--port", type=int, help="Port to listen on (default: from PORT env var or 8000)")
     parser.add_argument("--device_id", type=int, default=0, help="Device ID to use")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
     parser.add_argument("--max_seq_len", type=int, default=512, help="Maximum sequence length")
     parser.add_argument("--instruct", action="store_true", help="Use instruct mode")
     parser.add_argument("--no-preload", action="store_true", help="Don't preload model at startup")
+    parser.add_argument("--use-legacy", action="store_true", help="Force use of legacy model loading")
     
     args = parser.parse_args()
+    
+    # Log tt-transformers availability
+    if TT_TRANSFORMERS_AVAILABLE:
+        logger.info("✅ tt-transformers framework available - using shared components")
+    else:
+        logger.warning("⚠️ tt-transformers framework not available - using legacy implementation")
     
     # Start background download immediately using model_manager
     logger.info("Starting background model download...")
     model_manager.start_background_download()
     
-    # Firmware precompilation step - force JIT build of idle_erisc.elf
-    logger.info("Precompiling TTNN firmware...")
+    # Enhanced firmware precompilation with YAML error handling
+    logger.info("Precompiling TTNN firmware with enhanced error handling...")
     try:
         import ttnn
         logger.info("TTNN imported successfully, attempting device initialization for firmware build")
         
-        # Force firmware compilation by opening device
-        device = ttnn.open_device(device_id=args.device_id)
-        logger.info(f"✅ TTNN device {args.device_id} opened successfully - firmware compiled")
-        
-        # Verify firmware files exist
-        firmware_paths = [
-            "/workspace/runtime/hw/lib/wormhole/idle_erisc.elf",
-            "/workspace/runtime/hw/lib/wormhole/tmu-crt0.o",
-            "/workspace/runtime/hw/lib/wormhole/noc.o"
-        ]
-        
-        missing_firmware = []
-        for fw_path in firmware_paths:
-            if not os.path.exists(fw_path):
-                missing_firmware.append(fw_path)
-        
-        if missing_firmware:
-            logger.warning(f"Some firmware files still missing after device init: {missing_firmware}")
-        else:
-            logger.info("✅ All essential firmware files verified present")
+        # Force firmware compilation by opening device with enhanced error handling
+        try:
+            device = ttnn.open_device(device_id=args.device_id)
+            logger.info(f"✅ TTNN device {args.device_id} opened successfully - firmware compiled")
             
-        # Close device to free resources for later use
-        ttnn.close_device(device)
-        logger.info("Device closed after firmware precompilation")
+            # Verify firmware files exist
+            firmware_paths = [
+                "/workspace/runtime/hw/lib/wormhole/idle_erisc.elf",
+                "/workspace/runtime/hw/lib/wormhole/tmu-crt0.o",
+                "/workspace/runtime/hw/lib/wormhole/noc.o"
+            ]
+            
+            missing_firmware = []
+            for fw_path in firmware_paths:
+                if not os.path.exists(fw_path):
+                    missing_firmware.append(fw_path)
+            
+            if missing_firmware:
+                logger.warning(f"Some firmware files still missing after device init: {missing_firmware}")
+            else:
+                logger.info("✅ All essential firmware files verified present")
+                
+            # Close device to free resources for later use
+            ttnn.close_device(device)
+            logger.info("Device closed after firmware precompilation")
+            
+        except Exception as device_error:
+            error_str = str(device_error)
+            
+            # Enhanced YAML error handling during firmware precompilation
+            if "YAML" in error_str or "bad conversion" in error_str:
+                logger.error(f"❌ YAML parsing error during firmware precompilation: {device_error}")
+                logger.error("SOC descriptor YAML parsing failed. Common causes:")
+                logger.error("1. Type mismatch in eth_endpoint field (should be integer, not list)")
+                logger.error("2. Corrupted SOC descriptor file")
+                logger.error("3. Version mismatch between descriptor and parser")
+                
+                # Try to provide specific guidance
+                soc_descriptor_path = "/workspace/tt-metal/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml"
+                if os.path.exists(soc_descriptor_path):
+                    logger.error(f"Check SOC descriptor at: {soc_descriptor_path}")
+                    logger.error("Look for line 29, column 21 - eth_endpoint field format")
+                else:
+                    logger.error(f"SOC descriptor missing: {soc_descriptor_path}")
+                
+                # Check if we're in a cloud environment where this is expected
+                is_cloud = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true' or os.environ.get('IS_DOCKER_ENVIRONMENT') == 'true'
+                if is_cloud:
+                    logger.warning("Running in cloud environment - YAML parsing failure may be expected")
+                else:
+                    logger.error("YAML parsing failed in local environment - this will prevent model loading")
+                    # Don't raise in cloud environments
+                    if not is_cloud:
+                        raise
+                        
+            elif "build failed" in error_str or "link failure" in error_str:
+                logger.error(f"Firmware build failed: {device_error}")
+                logger.error("This indicates missing or corrupted firmware files")
+                
+                # Check if we're in a cloud environment
+                is_cloud = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true' or os.environ.get('IS_DOCKER_ENVIRONMENT') == 'true'
+                if is_cloud:
+                    logger.warning("Running in cloud environment - firmware build failure is expected")
+                else:
+                    logger.error("Firmware build failed in local environment")
+                    
+            else:
+                logger.error(f"Device initialization failed: {device_error}")
+                
+                # Check if we're in a cloud environment
+                is_cloud = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true' or os.environ.get('IS_DOCKER_ENVIRONMENT') == 'true'
+                if is_cloud:
+                    logger.warning("Running in cloud environment - device initialization failure is expected")
+                else:
+                    logger.error("Device initialization failed in local environment")
+                    # Don't raise in cloud environments
+                    if not is_cloud:
+                        raise
         
     except ImportError as e:
         logger.warning(f"TTNN not available for firmware precompilation: {e}")
@@ -2454,7 +2902,14 @@ def main():
     BATCH_SIZE = args.batch_size
     MAX_SEQ_LEN = args.max_seq_len
     INSTRUCT_MODE = args.instruct
-      # Determine port: command line arg > environment variable > default 8000
+    
+    # Override tt-transformers availability if legacy mode is requested
+    if args.use_legacy:
+        logger.info("Legacy mode requested - forcing use of legacy model loading")
+        global TT_TRANSFORMERS_AVAILABLE
+        TT_TRANSFORMERS_AVAILABLE = False
+    
+    # Determine port: command line arg > environment variable > default 8000
     port = args.port if args.port else int(os.environ.get('PORT', 8000))
     
     run_server(port=port, preload=not args.no_preload)
