@@ -8,18 +8,28 @@
 #include <cstdio>
 #include <string>
 #include <type_traits>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cerrno>
+#include <cstring>
 
 #include <flatbuffers/flatbuffers.h>
 
 #include <tt_stl/overloaded.hpp>
+#include <tt_stl/cleanup.hpp>
 
+#include "distributed/distributed_tensor_config.hpp"
+#include "tensor/tensor_spec.hpp"
+#include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "tensor/flatbuffer/tensor_types_from_flatbuffer.hpp"
-#include "tensor/flatbuffer/tensor_types_to_flatbuffer.hpp"
+#include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
+#include "tensor/flatbuffer/tensor_flatbuffer.hpp"
 
 namespace tt::tt_metal {
 
@@ -41,15 +51,15 @@ void validate_version(uint8_t version_id) {
         VERSION_ID);
 }
 
-struct FileCloser {
-    void operator()(FILE* file) const {
+auto make_file_closer(FILE* file) {
+    return ttsl::make_cleanup([file]() {
         if (file) {
             if (fclose(file) != 0) {
-                log_warning("Failed to close file");
+                log_warning(tt::LogAlways, "Failed to close file");
             }
         }
-    }
-};
+    });
+}
 
 constexpr uint64_t SENTINEL_VALUE = std::numeric_limits<uint64_t>::max();
 
@@ -113,23 +123,28 @@ void dump_host_storage(FILE* output_file, const HostStorage& storage, DataType d
 }
 
 void dump_multi_device_host_storage(
-    FILE* output_file, const MultiDeviceHostStorage& storage, const DistributedTensorConfig& strategy, DataType dtype) {
-    uint64_t num_buffers = storage.num_buffers();
+    FILE* output_file,
+    const MultiDeviceHostStorage& storage,
+    const DistributedTensorConfig& strategy,
+    const TensorSpec& tensor_spec) {
+    std::vector<HostBuffer> buffers;
+    storage.distributed_buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
+
+    uint64_t num_buffers = buffers.size();
     safe_fwrite(&num_buffers, sizeof(num_buffers), 1, output_file);
 
     // Use the user-specified strategy which defines how it gets distributed when mapped onto multi-device
     safe_fwrite(&strategy, sizeof(strategy), 1, output_file);
 
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
-        dump_host_storage(output_file, storage.get_buffer(0), dtype);
-        auto spec = storage.get_tensor_spec(0);
-        dump_tensor_spec(spec, output_file);
+        dump_host_storage(output_file, buffers.front(), tensor_spec.data_type());
+        dump_tensor_spec(tensor_spec, output_file);
     } else {
         for (int i = 0; i < num_buffers; i++) {
-            dump_host_storage(output_file, storage.get_buffer(i), dtype);
+            dump_host_storage(output_file, buffers[i], tensor_spec.data_type());
         }
         for (int i = 0; i < num_buffers; i++) {
-            dump_tensor_spec(storage.get_tensor_spec(i), output_file);
+            dump_tensor_spec(tensor_spec, output_file);
         }
     }
 }
@@ -159,7 +174,9 @@ DistributedStorage load_multi_device_host_storage(
     safe_fread(&strategy, sizeof(strategy), 1, input_file);
 
     std::vector<HostBuffer> buffers;
-    std::vector<ttnn::TensorSpec> specs;
+    // Tensor spec was serialized, but now TTNN enforces uniform tensor specs.
+    // Load the spec without using it, to correctly read the file.
+    auto ignore_spec = [](const TensorSpec&) {};
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         uint64_t size = 0;
         safe_fread(&size, sizeof(size), 1, input_file);
@@ -167,13 +184,11 @@ DistributedStorage load_multi_device_host_storage(
         safe_fread(data.data(), sizeof(T) * size, 1, input_file);
         HostBuffer buffer = HostBuffer(std::move(data));
         buffers.push_back(std::move(buffer));
-        auto spec = load_tensor_spec(input_file);
-        specs.push_back(spec);
+        ignore_spec(load_tensor_spec(input_file));
 
         auto num_devices = mesh_device ? mesh_device->num_devices() : 1;
         for (std::size_t i = 1; i < num_devices; ++i) {
             buffers.push_back(buffers[0]);
-            specs.push_back(spec);
         }
 
     } else {
@@ -186,11 +201,11 @@ DistributedStorage load_multi_device_host_storage(
             buffers.push_back(std::move(buffer));
         }
         for (std::size_t i = 0; i < num_buffers; ++i) {
-            specs.push_back(load_tensor_spec(input_file));
+            ignore_spec(load_tensor_spec(input_file));
         }
     }
 
-    return {MultiDeviceHostStorage{std::move(buffers), std::move(specs)}, strategy};
+    return {MultiDeviceHostStorage{std::move(buffers)}, strategy};
 }
 
 HostStorage load_host_storage(FILE* input_file, DataType data_type) {
@@ -236,24 +251,22 @@ DistributedStorage load_multi_device_host_storage(
     }
 }
 
-template <typename T>
 DistributedStorage load_storage(
-    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device) {
+    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, MeshDevice* device) {
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
-        if constexpr (std::is_same_v<T, MeshDevice*>) {
-            return load_multi_device_host_storage(input_file, data_type, layout, device);
-        }
+        return load_multi_device_host_storage(input_file, data_type, layout, device);
     }
     return DistributedStorage{load_host_storage(input_file, data_type), ReplicateTensor{}};
 }
 
-template <typename T>
-Tensor load_tensor_helper(const std::string& file_name, T device) {
+}  // namespace
+
+Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     FILE* input_file = fopen(file_name.c_str(), "rb");
     if (not input_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, FileCloser> file_guard(input_file);
+    auto cleanup = make_file_closer(input_file);
 
     std::size_t read_sentinel;
     safe_fread(&read_sentinel, sizeof(read_sentinel), 1, input_file);
@@ -277,20 +290,17 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     return tensor;
 }
 
-}  // namespace
-
-void dump_tensor(
-    const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
+void dump_tensor(const std::string& file_name, const Tensor& tensor) {
     FILE* output_file = fopen(file_name.c_str(), "wb");
     if (not output_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, FileCloser> file_guard(output_file);
+    auto cleanup = make_file_closer(output_file);
 
     safe_fwrite(&SENTINEL_VALUE, sizeof(SENTINEL_VALUE), 1, output_file);
     safe_fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
 
-    dump_tensor_spec(tensor.get_tensor_spec(), output_file);
+    dump_tensor_spec(tensor.tensor_spec(), output_file);
 
     auto storage_type = tensor.storage_type();
     safe_fwrite(&storage_type, sizeof(storage_type), 1, output_file);
@@ -303,26 +313,18 @@ void dump_tensor(
 
     std::visit(
         tt::stl::overloaded{
-            [output_file, dtype = tensor.get_dtype()](const HostStorage& storage) {
+            [output_file, dtype = tensor.dtype()](const HostStorage& storage) {
                 dump_host_storage(output_file, storage, dtype);
             },
-            [output_file, dtype = tensor.get_dtype()](const DeviceStorage& storage) {
+            [output_file, dtype = tensor.dtype()](const DeviceStorage& storage) {
                 TT_THROW("Device storage isn't supported");
             },
-            [output_file, &strategy, dtype = tensor.get_dtype()](const MultiDeviceHostStorage& storage) {
-                auto distribute_config = get_distributed_tensor_config(strategy);
-                dump_multi_device_host_storage(output_file, storage, distribute_config, dtype);
+            [output_file, &tensor](const MultiDeviceHostStorage& storage) {
+                dump_multi_device_host_storage(
+                    output_file, storage, tensor.distributed_tensor_config(), tensor.tensor_spec());
             },
         },
-        tensor_to_dump.get_storage());
-}
-
-// Explicit instantiations
-Tensor load_tensor(const std::string& file_name, IDevice* device) {
-    return load_tensor_helper<IDevice*>(file_name, device);
-}
-Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
-    return load_tensor_helper<MeshDevice*>(file_name, device);
+        tensor_to_dump.storage());
 }
 
 void dump_memory_config(FILE* output_file, const MemoryConfig& memory_config) {
@@ -340,7 +342,7 @@ void dump_memory_config(const std::string& file_name, const MemoryConfig& memory
     if (not output_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, FileCloser> file_guard(output_file);
+    auto cleanup = make_file_closer(output_file);
     dump_memory_config(output_file, memory_config);
 }
 
@@ -366,8 +368,66 @@ MemoryConfig load_memory_config(const std::string& file_name) {
     if (not input_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, FileCloser> file_guard(input_file);
+    auto cleanup = make_file_closer(input_file);
     return load_memory_config(input_file);
+}
+
+void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
+    FILE* output_file = fopen(file_name.c_str(), "wb");
+    TT_FATAL(output_file != nullptr, "Cannot open \"{}\"", file_name);
+    auto cleanup = make_file_closer(output_file);
+
+    Tensor cpu_tensor = tensor.cpu();
+
+    std::vector<HostBuffer> buffers;
+    flatbuffers::FlatBufferBuilder builder;
+    auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
+    builder.Finish(tensor_offset);
+
+    uint64_t header_size = builder.GetSize();
+    safe_fwrite(&header_size, sizeof(header_size), 1, output_file);
+    safe_fwrite(builder.GetBufferPointer(), header_size, 1, output_file);
+
+    for (const auto& buffer : buffers) {
+        auto buffer_view = buffer.view_bytes();
+        safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
+    }
+}
+
+Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) {
+    int fd = open(file_name.c_str(), O_RDONLY | O_CLOEXEC);
+    TT_FATAL(fd != -1, "Cannot open \"{}\"", file_name);
+    auto cleanup = ttsl::make_cleanup([fd]() { close(fd); });
+
+    struct stat file_stat;
+    TT_FATAL(fstat(fd, &file_stat) == 0, "Failed to get file stats for \"{}\"", file_name);
+    size_t file_size = file_stat.st_size;
+
+    // Mmap the file to read tensor data lazily.
+    void* mmap_addr = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    TT_FATAL(mmap_addr != MAP_FAILED, "Failed to mmap file \"{}\": {}", file_name, strerror(errno));
+
+    std::shared_ptr<void> mmap_ptr(mmap_addr, [file_size](void* addr) { munmap(addr, file_size); });
+    MemoryPin memory_pin(mmap_ptr);
+
+    auto* file_data = static_cast<std::byte*>(mmap_addr);
+    uint64_t header_size = 0;
+    std::memcpy(&header_size, file_data, sizeof(header_size));
+
+    const auto* header_start = reinterpret_cast<const std::uint8_t*>(file_data) + sizeof(header_size);
+    flatbuffers::Verifier verifier(header_start, header_size);
+    TT_FATAL(ttnn::flatbuffer::VerifyTensorBuffer(verifier), "Tensor deserialization failed: invalid buffer");
+    auto fb_tensor = ttnn::flatbuffer::GetTensor(header_start);
+
+    const uint64_t data_offset = sizeof(header_size) + header_size;
+    const uint64_t data_size = file_size - data_offset;
+
+    Tensor tensor =
+        ttnn::from_flatbuffer(fb_tensor, tt::stl::Span<std::byte>(file_data + data_offset, data_size), memory_pin);
+    if (device != nullptr) {
+        tensor = tensor.to_device(device);
+    }
+    return tensor;
 }
 
 }  // namespace tt::tt_metal

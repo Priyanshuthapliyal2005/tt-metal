@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -106,7 +106,6 @@ inline void wait_subordinate_eriscs(uint32_t &heartbeat) {
 
 int main() {
     configure_csr();
-    DIRTY_STACK_MEMORY();
     WAYPOINT("I");
     do_crt1((uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
     uint32_t heartbeat = 0;
@@ -119,6 +118,9 @@ int main() {
     risc_init();
 
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+#ifdef ARCH_BLACKHOLE
+    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+#endif
     set_deassert_addresses();
     //device_setup();
 
@@ -128,7 +130,9 @@ int main() {
     }
 
     deassert_all_reset(); // Bring all riscs on eth cores out of reset
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    // Wait for all subordinate ERISCs to be ready before reporting the core is done initializing.
+    wait_subordinate_eriscs(heartbeat);
+    mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     // Cleanup profiler buffer incase we never get the go message
 
@@ -138,7 +142,7 @@ int main() {
         init_sync_registers();
         // Wait...
         WAYPOINT("GW");
-        while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {
+        while (mailboxes->go_message.signal != RUN_MSG_GO) {
             invalidate_l1_cache();
             RISC_POST_HEARTBEAT(heartbeat);
         };
@@ -167,32 +171,27 @@ int main() {
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
-                    kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                (*kernel_address)((uint32_t)kernel_address);
-                RECORD_STACK_USAGE();
+                uint32_t kernel_lma = (kernel_config_base +
+                                       launch_msg_address->kernel_config.kernel_text_offset[index]);
+                auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+                record_stack_usage(stack_free);
                 WAYPOINT("D");
             }
 
             wait_subordinate_eriscs(heartbeat);
 
-            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 notify_dispatch_core_done(dispatch_addr, noc_index);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
-#ifndef ARCH_BLACKHOLE
-        while (1) {
-            RISC_POST_HEARTBEAT(heartbeat);
-        }
-#endif
     }
 
     return 0;

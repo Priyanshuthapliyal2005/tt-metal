@@ -17,7 +17,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -81,9 +81,7 @@ TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceProgramsOnCQ1) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0) {
-                    device->enable_program_cache();
-                }
+
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
@@ -139,9 +137,7 @@ TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceProgramsOnCQ0) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0) {
-                    device->enable_program_cache();
-                }
+
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
@@ -193,9 +189,6 @@ TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceWithCQ1Only) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
-                if (i == 0 and outer_loop == 0) {
-                    device->enable_program_cache();
-                }
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }

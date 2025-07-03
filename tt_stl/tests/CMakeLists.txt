@@ -7,18 +7,19 @@ target_sources(
     unit_tests_stl_smoke
     PRIVATE
         test_any_range.cpp
+        test_cleanup.cpp
         test_indestructible.cpp
         test_slotmap.cpp
         test_span.cpp
         test_strong_type.cpp
 )
-target_include_directories(unit_tests_stl_smoke PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(
     unit_tests_stl_smoke
     PRIVATE
         gmock
         gtest
         gtest_main
+        TT::STL
 )
 
 add_executable(unit_tests_stl)

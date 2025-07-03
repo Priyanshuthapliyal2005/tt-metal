@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -249,7 +249,7 @@ void device_setup() {
 
 inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_INIT;
 
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
@@ -272,7 +272,7 @@ inline void start_ncrisc_kernel_run_early(dispatch_core_processor_masks enables)
     // On Wormhole, start_ncrisc_kernel_run will reset NCRISC to start the
     // kernel running. We delay it until later to give the NCRISC time to load
     // CBs before we wait on it.
-#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
+#if !defined(ARCH_WORMHOLE)
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     }
@@ -280,7 +280,7 @@ inline void start_ncrisc_kernel_run_early(dispatch_core_processor_masks enables)
 }
 
 inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
-#ifdef NCRISC_FIRMWARE_KERNEL_SPLIT
+#if defined(ARCH_WORMHOLE)
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         // The NCRISC behaves badly if it jumps from L1 to IRAM, so instead halt it and then reset it to the IRAM
         // address it provides.
@@ -325,7 +325,6 @@ inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb
 
 int main() {
     configure_csr();
-    DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -342,10 +341,11 @@ int main() {
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     deassert_ncrisc_trisc();
 
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    // Wait for all cores to be finished initializing before reporting initialization done.
+    wait_ncrisc_trisc();
+    mailboxes->go_message.signal = RUN_MSG_DONE;
 
     // Initialize the NoCs to a safe state
     // This ensures if we send any noc txns without running a kernel setup are valid
@@ -365,23 +365,26 @@ int main() {
         // before mcasting the launch message (as a hang workaround), which
         // ensures that the unicast data will also have been received.
         while (
-            ((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
+            ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) &&
             !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+            if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
+                (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST)) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
-                uint32_t go_message_index = mailboxes->go_message_index;
-                // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently guaranteed
-                // to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid value.
-                // For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn is not issued.
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                // Notify dispatcher that this has been done
-                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                notify_dispatch_core_done(dispatch_addr, noc_index);
+                if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                    // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
+                    // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
+                    // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn
+                    // is not issued.
+                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                    mailboxes->go_message.signal = RUN_MSG_DONE;
+                    // Notify dispatcher that this has been done
+                    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                    notify_dispatch_core_done(dispatch_addr, noc_index);
+                }
             }
         }
 
@@ -452,10 +455,10 @@ int main() {
                 barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
-                    (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                (*kernel_address)((uint32_t)kernel_address);
-                RECORD_STACK_USAGE();
+                uint32_t kernel_lma = (kernel_config_base +
+                                       launch_msg_address->kernel_config.kernel_text_offset[index]);
+                auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+                record_stack_usage(stack_free);
             } else {
 #if defined(PROFILE_KERNEL)
                 // This was not initialized in the kernel
@@ -506,15 +509,14 @@ int main() {
             }
 #endif
 
-            uint32_t go_message_index = mailboxes->go_message_index;
-            mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+            mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 // Set launch message to invalid, so that the next time this slot is encountered, kernels are only run if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch

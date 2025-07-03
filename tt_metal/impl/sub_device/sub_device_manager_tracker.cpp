@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,18 +58,6 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
     return sub_device_manager_id;
 }
 
-std::tuple<SubDeviceManagerId, SubDeviceId> SubDeviceManagerTracker::create_sub_device_manager_with_fabric(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    auto fabric_sub_device = SubDevice(std::array{
-        CoreRangeSet(),
-        default_sub_device_manager_->sub_device(SubDeviceId{0}).cores(HalProgrammableCoreType::ACTIVE_ETH)});
-    auto new_sub_devices = std::vector<SubDevice>(sub_devices.begin(), sub_devices.end());
-    new_sub_devices.push_back(fabric_sub_device);
-    auto fabric_sub_device_id = SubDeviceId{static_cast<uint32_t>(new_sub_devices.size() - 1)};
-    auto sub_device_manager_id = this->create_sub_device_manager(new_sub_devices, local_l1_size);
-    return {sub_device_manager_id, fabric_sub_device_id};
-}
-
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
@@ -78,19 +66,12 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
         // Multi CQ support for MeshDevice is not currently available
         distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
         mesh_device->mesh_command_queue().reset_worker_state(
-            true,
-            num_sub_devices,
-            sub_device_manager->noc_mcast_unicast_data(),
-            sub_device_manager->get_core_go_message_mapping());
+            true, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
     } else {
         for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
             auto& hw_cq = device_->command_queue(cq_id);
             // Only need to reset launch messages once, so reset on cq 0
-            hw_cq.reset_worker_state(
-                cq_id == 0,
-                num_sub_devices,
-                sub_device_manager->noc_mcast_unicast_data(),
-                sub_device_manager->get_core_go_message_mapping());
+            hw_cq.reset_worker_state(cq_id == 0, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
         }
     }
     sub_device_manager->reset_sub_device_stall_group();

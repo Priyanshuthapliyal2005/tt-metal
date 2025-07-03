@@ -17,14 +17,14 @@ from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def get_expected_times(name):
-    base = {"yolov8x": (128.267, 0.54)}
+    base = {"yolov8x": (128.267, 0.56)}
     return base[name]
 
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize("input_tensor", [torch.rand((1, 640, 640, 3))], ids=["input_tensor"])
+@pytest.mark.parametrize("input_tensor", [torch.rand((1, 3, 640, 640))], ids=["input_tensor"])
 @pytest.mark.parametrize(
     "use_weights_from_ultralytics",
     [True],
@@ -43,7 +43,6 @@ def test_yolov8x(device, input_tensor, use_weights_from_ultralytics):
         state_dict = torch_model.state_dict()
     parameters = custom_preprocessor(device, state_dict)
 
-    input_tensor = torch.nn.functional.pad(input_tensor, (0, 13, 0, 0, 0, 0, 0, 0), value=0)
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_model = TtYolov8xModel(device, parameters)
     logger.info(f"Compiling model with warmup run")
@@ -61,6 +60,7 @@ def test_yolov8x(device, input_tensor, use_weights_from_ultralytics):
     for idx in range(iterations):
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
+        ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         ttnn_output_tensor = ttnn_model(ttnn_input)
 
         profiler.end(f"inference_time_{idx}")
@@ -100,7 +100,7 @@ def test_yolov8x(device, input_tensor, use_weights_from_ultralytics):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 48],
+        [1, 51.2],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

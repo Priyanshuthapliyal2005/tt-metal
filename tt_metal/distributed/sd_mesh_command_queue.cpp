@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,13 +19,14 @@ void SDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    const auto shard_view = buffer.get_device_buffer(device_coord);
-    const auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
+    auto device_buffer = buffer.get_device_buffer(device_coord);
+    auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
+    auto shard_view = device_buffer->view(region_value);
 
-    TT_FATAL(region_value.offset == 0, "Offset is not supported for slow dispatch");
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     tt::tt_metal::detail::WriteToBuffer(
-        *shard_view, tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src), region_value.size));
+        *shard_view,
+        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size));
 }
 
 void SDMeshCommandQueue::read_shard_from_device(
@@ -35,12 +36,11 @@ void SDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    const auto shard_view = buffer.get_device_buffer(device_coord);
-    const auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
+    auto device_buffer = buffer.get_device_buffer(device_coord);
+    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
-    TT_FATAL(region_value.offset == 0, "Offset is not supported for slow dispatch");
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
-    tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst), region_value.size);
+    tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 
 void SDMeshCommandQueue::submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>&, bool) {}
@@ -77,8 +77,7 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {}
 
-void SDMeshCommandQueue::reset_worker_state(
-    bool, uint32_t, const vector_aligned<uint32_t>&, const std::vector<std::pair<CoreRangeSet, uint32_t>>&) {}
+void SDMeshCommandQueue::reset_worker_state(bool, uint32_t, const vector_aligned<uint32_t>&) {}
 
 void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<MeshTraceDescriptor>&) {
     TT_THROW("Not supported for slow dispatch");

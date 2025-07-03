@@ -1,23 +1,27 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include "ttnn-pybind/decorators.hpp"
+#include "conv2d_pybind.hpp"
 
-#include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
-#include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
+#include <array>
+#include <cstdint>
+#include <variant>
+#include <optional>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/constants.hpp>
 
-namespace py = pybind11;
-
-namespace ttnn {
-namespace operations::conv {
-namespace conv2d {
+namespace ttnn::operations::conv::conv2d {
 
 void py_bind_conv2d(py::module& module) {
     bind_registered_operation(
@@ -412,7 +416,6 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
-            bool,
             bool>(),
         py::kw_only(),
         py::arg("dtype") = DataType::BFLOAT16,
@@ -426,15 +429,14 @@ void py_bind_conv2d(py::module& module) {
         py::arg("override_sharding_config") = false,
         py::arg("shard_layout") = std::nullopt,
         py::arg("core_grid") = std::nullopt,
-        py::arg("transpose_shards") = true,
+        py::arg("transpose_shards") = false,
         py::arg("output_layout") = Layout::TILE,
-        py::arg("preprocess_weights_on_device") = false,
-        py::arg("always_preprocess_weights") = false,
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("enable_split_reader") = false,
         py::arg("enable_subblock_padding") = false,
-        py::arg("in_place") = false);
+        py::arg("in_place") = false,
+        py::arg("enable_kernel_stride_folding") = false);
     py_conv_config.def_readwrite(
         "dtype",
         &Conv2dConfig::dtype,
@@ -510,19 +512,6 @@ void py_bind_conv2d(py::module& module) {
         If the input is in :class:`ttnn.Layout.TILE` format, the halo micro-op will convert it to :class:`ttnn.Layout.ROW_MAJOR` format.
         So if the next op is a conv op, it is recommended to set this to :class:`ttnn.Layout.ROW_MAJOR`.
         )doc");
-    py_conv_config.def_readwrite("preprocess_weights_on_device", &Conv2dConfig::preprocess_weights_on_device, R"doc(
-        Determines if the weights should be preprocessed on host or device.
-        For large weights, it is recommended to set this to true, as it would be faster.
-        )doc");
-    py_conv_config.def_readwrite("always_preprocess_weights", &Conv2dConfig::always_preprocess_weights, R"doc(
-        Used only when preprocess_weights_on_device is set to true.
-
-        The Conv2d op determines if the weights should be preprocessed or not, by examining the storage type.
-        If the weights are on device, then the op assumes that the weights are already preprocessed.
-
-        However, if this flag is set to true, the op will always preprocess the weights, even if they are on device.
-        This is useful when the weights are on device, but in the PyTorch format [out_channels, in_channels, kernel_height, kernel_width].
-        )doc");
     py_conv_config.def_readwrite("enable_act_double_buffer", &Conv2dConfig::enable_act_double_buffer, R"doc(
             Doubles the size of the Activation Circular Buffer to allow for double buffering, preventing stalls of the activation reader kernel.
             This improves performance, but increases memory usage.
@@ -541,6 +530,31 @@ void py_bind_conv2d(py::module& module) {
             Enables support for in_place halo.
             This re-uses the input tensor as the output for halo, overwriting the input tensor.
             This can be used if the input tensor is not used by any other op after the conv op.
+        )doc");
+
+    py_conv_config.def_readwrite("enable_kernel_stride_folding", &Conv2dConfig::enable_kernel_stride_folding, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        Enables tensor folding optimization when strides match kernel dimensions.
+
+        This feature is under development and may change without notice.
+        Use with caution in production environments (Issue: #22378).
+
+        When enabled, this optimization reshapes tensors as follows:
+
+        * Input tensor (NHWC format):
+          - From: (N, H, W, IC)
+          - To: (N, H/stride[0], W/stride[1], IC * kernel[0] * kernel[1])
+
+        * Weight tensor:
+          - From: (OC, IC, kernel[0], kernel[1])
+          - To: (1, 1, IC * kernel[0] * kernel[1], OC)
+
+        Note: This optimization is currently only applied when all of the following conditions are met:
+        1. The stride dimensions exactly match the kernel dimensions (stride[0] == kernel[0] and stride[1] == kernel[1])
+        2. The input tensor is stored in DRAM memory
+
+        ===============================================================
         )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });
@@ -582,6 +596,4 @@ void py_bind_conv2d(py::module& module) {
             "out_subblock_w_ntiles", [](const OptimizedConvBlockConfig& c) { return c.out_subblock_w_ntiles; });
 }
 
-}  // namespace conv2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv2d

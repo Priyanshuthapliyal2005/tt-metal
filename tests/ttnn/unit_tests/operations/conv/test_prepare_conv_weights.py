@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,13 +23,13 @@ def prepare_conv_weights_func(
     pad_h,
     pad_w,
     config_override,
-    on_device,
     device,
     groups,
     is_owned,
     slice_config=None,
     weights_dtype=None,
     torch_weights_dtype=None,
+    enable_kernel_stride_folding=False,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
@@ -75,7 +75,7 @@ def prepare_conv_weights_func(
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
-        preprocess_weights_on_device=on_device,
+        enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
     if config_override and "act_block_h" in config_override:
@@ -108,9 +108,6 @@ def prepare_conv_weights_func(
     }
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
-    if on_device:
-        tt_weight_tensor = ttnn.to_device(tt_weight_tensor, device)
-        tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device) if has_bias else None
 
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
@@ -201,7 +198,6 @@ def prepare_conv_weights_func(
         (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, None, 1),
     ),
 )
-@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("is_owned", [True, False], ids=["owned_storage", "borrowed_storage"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights(
@@ -217,7 +213,6 @@ def test_prepare_conv_weights(
     pad_h,
     pad_w,
     config_override,
-    on_device,
     device,
     groups,
     is_owned,
@@ -235,7 +230,6 @@ def test_prepare_conv_weights(
         pad_h,
         pad_w,
         config_override,
-        on_device,
         device,
         groups,
         is_owned,
@@ -249,7 +243,6 @@ def test_prepare_conv_weights(
         (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, None, 1),
     ),
 )
-@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("weights_dtype", [None, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("torch_weights_dtype", [ttnn.float32])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
@@ -268,7 +261,6 @@ def test_conv_weights_dtype(
     config_override,
     device,
     groups,
-    on_device,
     weights_dtype,
     torch_weights_dtype,
 ):
@@ -285,7 +277,6 @@ def test_conv_weights_dtype(
         pad_h,
         pad_w,
         config_override,
-        on_device,
         device,
         groups,
         False,
@@ -389,7 +380,6 @@ def test_prepare_bias(
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
 
-    tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device)
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
             bias_tensor=tt_bias_tensor, input_memory_config=tt_input_tensor.memory_config(), **conv_kwargs
@@ -468,12 +458,58 @@ def test_conv_dram(
         padding[0],
         padding[1],
         config,
-        True,
-        device=device,
+        device,
         groups=1,
         is_owned=False,
         slice_config=ttnn.Conv2dSliceConfig(
             slice_type=slice_type,
             num_slices=num_slices,
         ),
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w",
+    (
+        (1, 1024, 3, 224, 224, 16, 16, 16, 16),
+        (1, 1024, 3, 224, 224, 32, 32, 32, 32),
+        (1, 192, 3, 512, 672, 16, 16, 16, 16),
+        (1, 192, 3, 512, 672, 32, 32, 32, 32),
+        (1, 768, 3, 384, 512, 32, 32, 32, 32),
+    ),
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
+def test_prepare_conv_weights_with_fold(
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    device,
+):
+    pad_h = 0
+    pad_w = 0
+    groups = 1
+
+    prepare_conv_weights_func(
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        None,
+        device,
+        groups,
+        is_owned=False,
+        enable_kernel_stride_folding=True,
     )

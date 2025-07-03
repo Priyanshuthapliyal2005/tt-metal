@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,7 +67,6 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 
 int main() {
     configure_csr();
-    DIRTY_STACK_MEMORY();
     WAYPOINT("I");
     do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
@@ -88,22 +87,22 @@ int main() {
         noc_local_state_init(n);
     }
 
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    mailboxes->go_message.signal = RUN_MSG_DONE;
 
     while (1) {
         // Wait...
         WAYPOINT("GW");
 
         uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
+        while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
-                mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                mailboxes->go_message.signal = RUN_MSG_DONE;
                 // Notify dispatcher that this has been done
                 internal_::notify_dispatch_core_done(dispatch_addr);
             }
@@ -143,20 +142,19 @@ int main() {
                 // TODO: This currently runs on second risc on active eth cores but with newer drop of syseng FW
                 //  this will run on risc0
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
-                    mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
-                (*kernel_address)((uint32_t)kernel_address);
-
-                RECORD_STACK_USAGE();
+                uint32_t kernel_lma =
+                    mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
+                auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+                record_stack_usage(stack_free);
                 WAYPOINT("D");
             }
 
-            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);

@@ -25,8 +25,6 @@ extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
 extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
-extern void kernel_init(uint32_t kernel_init);
-extern void kernel_launch(uint32_t kernel_base_addr);
 void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
 inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
@@ -80,9 +78,8 @@ uint32_t firmware_config_init(
 FORCE_INLINE
 void wait_for_go_message() {
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
-    uint32_t go_message_index = mailboxes->go_message_index;
 
-    while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
+    while (mailboxes->go_message.signal != RUN_MSG_GO) {
         invalidate_l1_cache();
     }
 }
@@ -120,17 +117,16 @@ FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_
 FORCE_INLINE
 bool is_message_go() {
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
-    uint32_t go_message_index = mailboxes->go_message_index;
 
-    return mailboxes->go_messages[go_message_index].signal == RUN_MSG_GO;
+    return mailboxes->go_message.signal == RUN_MSG_GO;
 }
 
 #define EARLY_RETURN_FOR_DEBUG \
-    if (is_message_go()) {     \
-        return;                \
-    }
+    if (is_message_go()) { goto early_debug_exit; }
+#define EARLY_RETURN_FOR_DEBUG_EXIT early_debug_exit:
 #else
 #define EARLY_RETURN_FOR_DEBUG
+#define EARLY_RETURN_FOR_DEBUG_EXIT
 #endif
 
 inline __attribute__((always_inline)) void configure_gathering() {
