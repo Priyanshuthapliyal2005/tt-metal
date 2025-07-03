@@ -2785,6 +2785,8 @@ def main():
     
     args = parser.parse_args()
     
+    global TT_TRANSFORMERS_AVAILABLE
+    
     # Log tt-transformers availability
     if TT_TRANSFORMERS_AVAILABLE:
         logger.info("✅ tt-transformers framework available - using shared components")
@@ -2906,7 +2908,6 @@ def main():
     # Override tt-transformers availability if legacy mode is requested
     if args.use_legacy:
         logger.info("Legacy mode requested - forcing use of legacy model loading")
-        global TT_TRANSFORMERS_AVAILABLE
         TT_TRANSFORMERS_AVAILABLE = False
     
     # Determine port: command line arg > environment variable > default 8000
