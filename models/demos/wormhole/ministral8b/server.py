@@ -490,6 +490,28 @@ def load_ministral_model_and_tokenizer(device_id=0, batch_size=1, max_seq_len=51
         import ttnn
         import torch
         
+        # Check if we're in Koyeb or other cloud environment
+        is_cloud = os.environ.get('IS_KOYEB_ENVIRONMENT') == 'true' or os.environ.get('ENVIRONMENT') == 'runtime'
+        
+        # Initialize TT Metal with proper error handling
+        try:
+            ttnn.initialize_tt_metal(force_hw_detect=not is_cloud)
+            logger.info("✅ TT Metal initialized")
+            
+            # Initialize bus table if needed
+            try:
+                ttnn.initialize_bus_table(force=True)
+                logger.info("✅ GPU bus table initialized")
+            except Exception as bus_error:
+                if not is_cloud:
+                    logger.warning(f"Bus table initialization failed: {bus_error}")
+                    
+        except Exception as init_error:
+            if not is_cloud:
+                logger.warning(f"TT Metal initialization failed: {init_error}")
+                # Only raise in non-cloud environment
+                raise
+        
         # Check if tt-transformers is available
         if not TT_TRANSFORMERS_AVAILABLE:
             logger.warning("tt-transformers not available, falling back to legacy implementation")
@@ -899,7 +921,27 @@ def load_ministral_model_and_tokenizer_optimized(device_id=0, batch_size=1, max_
 
 # Enhanced TTNN detection and hardware availability check
 def detect_ttnn_and_hardware():
-    """Detect TTNN availability and hardware status with enhanced YAML error handling."""
+    """Detect TTNN availability and hardware status with enhanced initialization."""
+    
+    # Initialize core manager and GPU bus tables early
+    try:
+        from models.demos.wormhole.ministral8b.tt.model_config import TtModelArgs
+        import ttnn
+        
+        # Explicitly initialize core manager
+        ttnn.initialize_tt_metal(force_hw_detect=True)
+        logger.info("✅ TT Metal initialized successfully")
+        
+        # Force GPU bus table initialization if needed
+        try:
+            ttnn.initialize_bus_table(force=True)
+            logger.info("✅ GPU bus table initialized")
+        except Exception as bus_error:
+            logger.warning(f"Bus table initialization failed (non-critical): {bus_error}")
+            
+    except Exception as init_error:
+        logger.warning(f"Early TT initialization failed: {init_error}")
+    
     ttnn_status = {
         'ttnn_available': False,
         'hardware_available': False,
@@ -1397,6 +1439,15 @@ def run_server(port=None, preload=True):
     logger.info(f"Starting Ministral-8B threaded server on port {port}")
     httpd.serve_forever()
 
+def cleanup_tt_resources():
+    """Clean up TT resources on shutdown"""
+    try:
+        import ttnn
+        ttnn.finalize_tt_metal()
+        logger.info("✅ TT Metal resources cleaned up")
+    except Exception as e:
+        logger.warning(f"Error during TT cleanup: {e}")
+
 def main():
     parser = argparse.ArgumentParser(description="Ministral-8B API Server")
     parser.add_argument("--port", type=int, help="Port to listen on (default: from PORT env var or 8000)")
@@ -1405,6 +1456,11 @@ def main():
     parser.add_argument("--max_seq_len", type=int, default=512, help="Maximum sequence length")
     parser.add_argument("--instruct", action="store_true", help="Use instruct mode")
     parser.add_argument("--no-preload", action="store_true", help="Don't preload model at startup")
+    parser.add_argument("--cloud-mode", action="store_true", help="Run in cloud mode with mock responses")
+    
+    # Register cleanup handler
+    import atexit
+    atexit.register(cleanup_tt_resources)
     
     args = parser.parse_args()
     
