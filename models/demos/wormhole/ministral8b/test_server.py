@@ -9,6 +9,7 @@ import json
 import time
 import os
 import sys
+import ttnn_compat
 
 def test_health_endpoint(base_url):
     """Test the health endpoint."""
@@ -127,6 +128,7 @@ import os
 import sys
 import tempfile
 import pytest
+import ttnn_compat
 
 def test_health_endpoint(base_url):
     """Test the health endpoint."""
@@ -257,15 +259,14 @@ def test_loader_and_firmware_precompile(tmp_path=None):
         
         # Test 2: Verify TTNN can open device (firmware compilation)
         print("   Testing TTNN device opening...")
-        import ttnn
         
-        # Should build and open device successfully
-        dev = ttnn.open_device(device_id=0)
+        # Should build and open device successfully using compatibility layer
+        dev = ttnn_compat.init_tt_metal(device_id=0)
         assert dev is not None, "Failed to open TTNN device"
         print("   ✅ TTNN device opened successfully")
         
-        # Clean up device
-        ttnn.close_device(dev)
+        # Clean up device using compatibility layer
+        ttnn_compat.finalize_tt_metal(dev)
         print("   ✅ TTNN device closed successfully")
         
         print("   🎉 All loader and firmware tests passed!")
@@ -423,6 +424,7 @@ import threading
 import subprocess
 import socket
 from contextlib import closing
+import ttnn_compat
 
 def test_health_endpoint(base_url):
     """Test the health endpoint."""
@@ -660,15 +662,14 @@ def test_loader_and_firmware_precompile(tmp_path=None):
         
         # Test 2: Verify TTNN can open device (firmware compilation)
         print("   Testing TTNN device opening...")
-        import ttnn
         
-        # Should build and open device successfully
-        dev = ttnn.open_device(device_id=0)
+        # Should build and open device successfully using compatibility layer
+        dev = ttnn_compat.init_tt_metal(device_id=0)
         assert dev is not None, "Failed to open TTNN device"
         print("   ✅ TTNN device opened successfully")
         
-        # Clean up device
-        ttnn.close_device(dev)
+        # Clean up device using compatibility layer
+        ttnn_compat.finalize_tt_metal(dev)
         print("   ✅ TTNN device closed successfully")
         
         print("   🎉 All loader and firmware tests passed!")

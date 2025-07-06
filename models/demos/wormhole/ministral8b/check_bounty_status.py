@@ -119,8 +119,8 @@ class BountyTracker:
         """Check if N300 hardware is available."""
         try:
             import ttnn
-            devices = ttnn.get_device_ids()
-            return len(devices) > 0
+            num_devices = ttnn.GetNumAvailableDevices()
+            return num_devices > 0
         except Exception:
             return False
     

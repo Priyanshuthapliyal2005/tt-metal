@@ -166,7 +166,8 @@ def check_hardware():
     """Check if N300 hardware is available and detected."""
     try:
         import ttnn
-        devices = ttnn.get_device_ids()
+        num_devices = ttnn.GetNumAvailableDevices()
+        devices = list(range(num_devices)) if num_devices > 0 else []
         print(f"✅ Found {len(devices)} Tenstorrent device(s): {devices}")
         return len(devices) > 0
     except Exception as e:

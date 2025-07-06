@@ -53,11 +53,30 @@ class MemoryOptimizedLoader:
         # Multi-device optimization
         self.device_config = self._detect_ttnn_devices()
     
+    def __del__(self):
+        """Cleanup TTNN devices when loader is destroyed."""
+        self.cleanup_devices()
+    
+    def cleanup_devices(self):
+        """Clean up all opened TTNN devices."""
+        try:
+            import ttnn
+            for device in self.device_config.get('devices', []):
+                try:
+                    ttnn.close_device(device)
+                except Exception as e:
+                    self.logger.warning(f"Failed to close TTNN device: {e}")
+            self.device_config['devices'] = []
+        except ImportError:
+            pass  # TTNN not available
+        except Exception as e:
+            self.logger.warning(f"Error during device cleanup: {e}")
+    
     def _detect_ttnn_devices(self) -> Dict[str, Any]:
         """Detect and configure TTNN devices for optimal utilization."""
         try:
             import ttnn
-            num_devices = ttnn.get_num_devices()
+            num_devices = ttnn.GetNumAvailableDevices()
             device_config = {
                 'num_devices': num_devices,
                 'devices': [],
@@ -386,6 +405,12 @@ class MemoryOptimizedLoader:
                 
             except Exception as e:
                 logger.error(f"✗ Failed to lazy load for TTNN: {e}")
+                # Clean up device on error
+                if 'device' in locals():
+                    try:
+                        ttnn.close_device(device)
+                    except:
+                        pass
                 raise
     
     def create_minimal_tokenizer(self, tokenizer_path: Path) -> Any:
