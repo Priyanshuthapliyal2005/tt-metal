@@ -5,6 +5,8 @@
 # Make it match pyproject.toml
 loguru==0.6.0
 
+requests
+
 git+https://github.com/tenstorrent/tt-smi.git@v3.0.20
 
 # For github workflow unit test failure annotations

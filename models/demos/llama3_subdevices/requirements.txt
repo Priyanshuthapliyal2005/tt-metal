@@ -1,2 +1,2 @@
-git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
 requests
+git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
