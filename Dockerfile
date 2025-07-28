@@ -1,16 +1,36 @@
 FROM ubuntu:22.04
 
-# Install system dependencies
+
+# Install system dependencies and kernel headers for DKMS
 RUN apt-get update && \
-    apt-get install -y wget sudo git python3 python3-pip python3-venv build-essential && \
+    apt-get install -y wget sudo git python3 python3-pip python3-venv build-essential dkms linux-headers-$(uname -r) && \
     apt-get clean
+
 
 # Download and run Tenstorrent's dependency and SFPI install scripts
 RUN wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/install_dependencies.sh && \
     wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-version.sh && \
     chmod a+x install_dependencies.sh && \
-    sudo ./install_dependencies.sh && \
+    ./install_dependencies.sh && \
     rm install_dependencies.sh sfpi-version.sh
+
+# Install TT-KMD driver (kernel module)
+RUN git clone https://github.com/tenstorrent/tt-kmd.git && \
+    cd tt-kmd && \
+    dkms add . && \
+    dkms install "tenstorrent/$(./tools/current-version)" && \
+    modprobe tenstorrent || true && \
+    cd .. && rm -rf tt-kmd
+
+# Install TT-Flash for firmware management
+RUN pip3 install git+https://github.com/tenstorrent/tt-flash.git
+
+# Download and flash firmware (example for Wormhole/N300, adjust as needed)
+ENV FW_TAG=v80.17.0.0
+ENV FW_PACK=fw_pack-80.17.0.0.fwbundle
+RUN wget https://github.com/tenstorrent/tt-firmware/raw/refs/tags/$FW_TAG/$FW_PACK && \
+    tt-flash flash --fw-tar $FW_PACK || true
+
 
 # Install Poetry for pyproject.toml support
 RUN pip3 install poetry
@@ -28,8 +48,11 @@ RUN python3 -m pip install -r tt_metal/python_env/requirements-dev.txt
 # (Optional) Add your docs step here if needed
 # COPY docs/ /workspace/docs/
 
+
 # Set environment variables
 ENV PYTHONPATH=/workspace
+ENV TT_METAL_HOME=/workspace
 
-# Run your demo script
+
+# Run your demo script by default
 CMD ["python3", "models/tt_transformers/demo/simple_text_demo.py"]
