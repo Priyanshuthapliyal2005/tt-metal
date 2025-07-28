@@ -103,7 +103,7 @@ class ModelOptimizations:
                 logger.info(
                     f"Llama 3 , Mistral 7B and Ministral 8B models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
                 )
-                 settings = {
+                settings = {
                     "TensorPrecision": {
                         TensorGroup.WQKV: PrecisionSetting.BFP8,
                         TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
@@ -120,40 +120,8 @@ class ModelOptimizations:
                     )
                     settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
                 inst = cls(settings)
-                else:
-                    inst = cls(
-                    {
-                        "TensorPrecision": {
-                            TensorGroup.WQKV: PrecisionSetting.BFP8,
-                            TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
-                            TensorGroup.WO: PrecisionSetting.BFP8,
-                        },
-                        "OpFidelity": {
-                            OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
-                            OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
-                        },
-                    }
-                )
-            else:
-                inst = cls(
-                    {
-                        "TensorPrecision": {
-                            TensorGroup.WQKV: PrecisionSetting.BF16,
-                            TensorGroup.KV_CACHE: PrecisionSetting.BF16,
-                            TensorGroup.WO: PrecisionSetting.BF16,
-                        },
-                        "OpFidelity": {
-                            OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
-                            OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
-                            OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
-                            OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
-                            OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
-                            OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
-                        },
-                    }
-                )
-        inst.__name__ = "accuracy"
-        return inst
+                inst.__name__ = "accuracy"
+                return inst
 
     @classmethod
     def performance(cls, model_name):
@@ -790,9 +758,9 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=n_w1_w3,
                 grid_size=mlp1_3_grid(seq_len),
-                per_core_N=math.ceil(n_w1_w3 / (self.tile_size * dram_shard_grid_width))
-                if mlp_w_dram_sharded
-                else None,
+                per_core_N=(
+                    math.ceil(n_w1_w3 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None
+                ),
             )
             n_w2 = self.dim
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
@@ -919,14 +887,14 @@ class ModelArgs:
                 packer_l1_acc=False,
             )
 
-            self.model_config[
-                "SCORES_BATCHED_MM_OUTPUT_MEMCFG"
-            ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
-                shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
-                core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+            self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = (
+                lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
+                    shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
+                    core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
             )
 
             # MLP configs
@@ -1495,7 +1463,7 @@ class ModelArgs:
         rope_scaling_params = text_config.get("rope_scaling", None)
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-             self.orig_context_len = rope_scaling_params.get(
+            self.orig_context_len = rope_scaling_params.get(
                 "original_max_position_embeddings",
                 text_config.get("original_max_position_embeddings", self.max_context_len),
             )
@@ -1678,7 +1646,7 @@ class ModelArgs:
             if self.checkpoint_type == CheckpointType.HuggingFace:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
-                 config = AutoConfig.from_pretrained(
+                config = AutoConfig.from_pretrained(
                     self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
                 )
                 config.num_layers = self.n_layers
@@ -1698,14 +1666,12 @@ class ModelArgs:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
                 model = AutoModelForCausalLM.from_pretrained(
-                    self.CKPT_DIR,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf
+                    self.CKPT_DIR, torch_dtype="auto", trust_remote_code=self.trust_remote_code_hf
                 )
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
-                )
+                # )
                 if self.cache_hf_flag:
                     self.cached_hf_model = model
                 state_dict = model.state_dict()
@@ -2135,7 +2101,7 @@ class ModelArgs:
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
                 tokenizer.stop_tokens = [tokenizer.eos_token_id]
-                 # Ministral-8B uses "<|end|>" as EOS token
+                # Ministral-8B uses "<|end|>" as EOS token
                 if "ministral-8B" in self.base_model_name.lower():
                     tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
             return tokenizer
@@ -2190,7 +2156,7 @@ class ModelArgs:
                 model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
-                     model = AutoModelForCausalLM.from_pretrained(
+                    model = AutoModelForCausalLM.from_pretrained(
                         self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
                     )
                     self.cached_hf_model = model
@@ -2398,7 +2364,7 @@ class HfAttentionWrapper:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-     def load_state_dict(self, state_dict, fuse_qkv=False):
+    def load_state_dict(self, state_dict, fuse_qkv=False):
         return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
 
     @property
@@ -2458,6 +2424,7 @@ class HfDecoderWrapper:
     def load_state_dict(self, state_dict, fuse_qkv=False, fuse_mlp=False):
         return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
 
+
 class HfModelWrapper:
     def __init__(self, model, head_dim):
         from transformers import DynamicCache
@@ -2486,7 +2453,7 @@ class HfModelWrapper:
 
     def load_state_dict(self, state_dict, fuse_qkv=False, fuse_mlp=False):
         return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
-        
+
     def eval(self):
         self.model.eval()
 
