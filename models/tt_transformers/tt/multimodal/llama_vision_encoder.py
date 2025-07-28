@@ -4,7 +4,10 @@
 
 import collections
 
-import llama_models.llama3.reference_impl.multimodal.encoder_utils as encoder_utils
+try:
+    from ..llama_models.llama3.reference_impl import multimodal as encoder_utils
+except ImportError:
+    encoder_utils = None
 import torch
 
 import ttnn

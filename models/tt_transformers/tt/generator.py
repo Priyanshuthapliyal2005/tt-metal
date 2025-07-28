@@ -5,13 +5,16 @@
 from dataclasses import dataclass
 
 import torch
-from llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
-from llama_models.llama3.reference_impl.generation import (
-    ChatPrediction,
-    CompletionPrediction,
-    TokenResult,
-    sample_top_p,
-)
+try:
+    from .llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
+    from .llama_models.llama3.reference_impl.generation import (
+        ChatPrediction,
+        CompletionPrediction,
+        TokenResult,
+        sample_top_p,
+    )
+except ImportError:
+    InterleavedTextMedia = StopReason = ChatPrediction = CompletionPrediction = TokenResult = sample_top_p = None
 from loguru import logger
 
 import ttnn

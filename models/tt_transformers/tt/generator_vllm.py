@@ -7,7 +7,10 @@ from typing import List, Union
 
 import PIL
 import torch
-from llama_models.llama3.api.chat_format import create_vision_mask
+try:
+    from .llama_models.llama3.api.chat_format import create_vision_mask
+except ImportError:
+    create_vision_mask = None
 from tqdm import tqdm
 from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext, TokenInputs, token_inputs
 from vllm.model_executor.models.interfaces import SupportsMultiModal

@@ -7,7 +7,10 @@ import logging
 from functools import partial
 from typing import List, Tuple
 
-import llama_models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
+try:
+    from ..llama_models.llama3.reference_impl import multimodal as llama_reference_image_transforms
+except ImportError:
+    llama_reference_image_transforms = None
 import torch
 from PIL import Image as PIL_Image
 from torch import Tensor

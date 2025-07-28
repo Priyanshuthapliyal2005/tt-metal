@@ -17,6 +17,19 @@ from llama_models.llama3.reference_impl.generation import (
     ChatPrediction,
     CompletionPrediction,
 )
+try:
+    from models.tt_transformers.tt.llama_models.llama3.api.datatypes import (
+        InterleavedTextMedia,
+        StopReason,
+    )
+    from models.tt_transformers.tt.llama_models.llama3.reference_impl.generation import (
+        ChatPrediction,
+        CompletionPrediction,
+        TokenResult,
+        sample_top_p,
+    )
+except ImportError:
+    InterleavedTextMedia = StopReason = ChatPrediction = CompletionPrediction = TokenResult = sample_top_p = None
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     num_blocks_in_seq,

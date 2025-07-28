@@ -5,11 +5,14 @@ import os
 from pathlib import Path
 from typing import Optional
 
-import llama_models.llama3.reference_impl.generation as llama_reference_generation
+try:
+    from models.tt_transformers.tt.llama_models.llama3.reference_impl import generation as llama_reference_generation
+    from models.tt_transformers.tt.llama_models.llama3.api.chat_format import ChatFormat
+    from models.tt_transformers.tt.llama_models.llama3.api.datatypes import ImageMedia, UserMessage
+    from models.tt_transformers.tt.llama_models.llama3.api.tokenizer import Tokenizer
+except ImportError:
+    llama_reference_generation = ChatFormat = ImageMedia = UserMessage = Tokenizer = None
 import pytest
-from llama_models.llama3.api.chat_format import ChatFormat
-from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
-from llama_models.llama3.api.tokenizer import Tokenizer
 from loguru import logger
 from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
