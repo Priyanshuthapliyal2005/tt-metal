@@ -44,7 +44,6 @@ RUN poetry install
 
 # Install dev requirements
 RUN python3 -m pip install -r tt_metal/python_env/requirements-dev.txt
-RUN python -m pip install -r tt_metal/python_env/requirements-dev.txt
 
 # (Optional) Add your docs step here if needed
 # COPY docs/ /workspace/docs/
