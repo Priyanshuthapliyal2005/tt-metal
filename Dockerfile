@@ -1,9 +1,9 @@
 FROM ubuntu:22.04
 
 
-# Install system dependencies and kernel headers for DKMS
+# Install system dependencies and DKMS (kernel headers must be on host, not in container)
 RUN apt-get update && \
-    apt-get install -y wget sudo git python3 python3-pip python3-venv build-essential dkms linux-headers-$(uname -r) && \
+    apt-get install -y wget sudo git python3 python3-pip python3-venv build-essential dkms && \
     apt-get clean
 
 
