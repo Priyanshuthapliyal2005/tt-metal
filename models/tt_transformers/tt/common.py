@@ -531,7 +531,7 @@ def create_tt_model(
     optimizations,
     max_seq_len,
     paged_attention_config: PagedAttentionConfig = None,
-    dtype=ttnn.BFLOAT16,
+    dtype=ttnn.bfloat16,
     state_dict=None,
     num_layers=None,
 ):
