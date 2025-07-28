@@ -7,6 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ttnn"
+version = "0.1.0"
 authors = [
     {name = "Tenstorrent"},
     {email = "info@tenstorrent.com"},
