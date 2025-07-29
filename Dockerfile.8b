@@ -1,4 +1,4 @@
-FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/manylinux-amd64:6a4379fbbaacf4254165ec57bfd7d2ab9834d085
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64:0b2ae09fc8a79c9f0d8cecc7a96ada6e37b09265
 
 WORKDIR /workspace
 COPY . .
