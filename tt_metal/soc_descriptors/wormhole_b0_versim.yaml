@@ -2,15 +2,18 @@ grid:
   x_size: 2
   y_size: 2
 
+
 arc:
-  [ ]
+  []
+
 
 pcie:
-  [ ]
+  []
+
 
 dram:
   [
-    [0-0, 0-1],
+    ["0-0", "0-1"],
   ]
 
 dram_views:
@@ -26,20 +29,24 @@ dram_views:
 dram_view_size:
   1073741824
 
+
 eth:
-  [ ]
+  []
+
 
 functional_workers:
   [
-   1-1,
+   "1-1",
   ]
+
 
 harvested_workers:
   []
 
+
 router_only:
   [
-   1-0
+   "1-0"
   ]
 
 worker_l1_size:
