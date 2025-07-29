@@ -26,74 +26,74 @@ dram_views:
   [
     {
       channel: 0,
-      eth_endpoint: [0, 0],
-      worker_endpoint: [2, 2],
+      eth_endpoint: 0,
+      worker_endpoint: 2,
       address_offset: 0
     },
     {
       channel: 0,
-      eth_endpoint: [0, 0],
-      worker_endpoint: [1, 1],
+      eth_endpoint: 0,
+      worker_endpoint: 1,
       address_offset: 1073741824
     },
     {
       channel: 1,
-      eth_endpoint: [1, 1],
-      worker_endpoint: [0, 0],
+      eth_endpoint: 1,
+      worker_endpoint: 0,
       address_offset: 0
     },
     {
       channel: 1,
-      eth_endpoint: [1, 1],
-      worker_endpoint: [2, 2],
+      eth_endpoint: 1,
+      worker_endpoint: 2,
       address_offset: 1073741824
     },
     {
       channel: 2,
-      eth_endpoint: [0, 0],
-      worker_endpoint: [1, 1],
+      eth_endpoint: 0,
+      worker_endpoint: 1,
       address_offset: 0
     },
     {
       channel: 2,
-      eth_endpoint: [0, 0],
-      worker_endpoint: [2, 2],
+      eth_endpoint: 0,
+      worker_endpoint: 2,
       address_offset: 1073741824
     },
     {
       channel: 3,
-      eth_endpoint: [2, 2],
-      worker_endpoint: [0, 0],
+      eth_endpoint: 2,
+      worker_endpoint: 0,
       address_offset: 0
     },
     {
       channel: 3,
-      eth_endpoint: [2, 2],
-      worker_endpoint: [1, 1],
+      eth_endpoint: 2,
+      worker_endpoint: 1,
       address_offset: 1073741824
     },
     {
       channel: 4,
-      eth_endpoint: [1, 1],
-      worker_endpoint: [2, 2],
+      eth_endpoint: 1,
+      worker_endpoint: 2,
       address_offset: 0
     },
     {
       channel: 4,
-      eth_endpoint: [1, 1],
-      worker_endpoint: [0, 0],
+      eth_endpoint: 1,
+      worker_endpoint: 0,
       address_offset: 1073741824
     },
     {
       channel: 5,
-      eth_endpoint: [1, 1],
-      worker_endpoint: [0, 0],
+      eth_endpoint: 1,
+      worker_endpoint: 0,
       address_offset: 0
     },
     {
       channel: 5,
-      eth_endpoint: [1, 1],
-      worker_endpoint: [2, 2],
+      eth_endpoint: 1,
+      worker_endpoint: 2,
       address_offset: 1073741824
     }
   ]
