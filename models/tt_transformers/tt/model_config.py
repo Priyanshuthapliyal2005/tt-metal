@@ -103,7 +103,7 @@ class ModelOptimizations:
                 logger.info(
                     f"Llama 3 , Mistral 7B and Ministral 8B models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
                 )
-                 settings = {
+                settings = {
                     "TensorPrecision": {
                         TensorGroup.WQKV: PrecisionSetting.BFP8,
                         TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
@@ -119,21 +119,21 @@ class ModelOptimizations:
                         f"Model {model_name} is running out of L1 memory under standard accuracy settings, using FP16 accumulate in attention prefill QKV Matmul"
                     )
                     settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
-                inst = cls(settings)
+                    inst = cls(settings)
                 else:
                     inst = cls(
-                    {
-                        "TensorPrecision": {
-                            TensorGroup.WQKV: PrecisionSetting.BFP8,
-                            TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
-                            TensorGroup.WO: PrecisionSetting.BFP8,
-                        },
-                        "OpFidelity": {
-                            OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
-                            OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
-                        },
-                    }
-                )
+                        {
+                            "TensorPrecision": {
+                                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                                TensorGroup.WO: PrecisionSetting.BFP8,
+                            },
+                            "OpFidelity": {
+                                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
+                                OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+                            },
+                        }
+                    )
             else:
                 inst = cls(
                     {
@@ -1495,7 +1495,7 @@ class ModelArgs:
         rope_scaling_params = text_config.get("rope_scaling", None)
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-             self.orig_context_len = rope_scaling_params.get(
+            self.orig_context_len = rope_scaling_params.get(
                 "original_max_position_embeddings",
                 text_config.get("original_max_position_embeddings", self.max_context_len),
             )
@@ -1678,7 +1678,7 @@ class ModelArgs:
             if self.checkpoint_type == CheckpointType.HuggingFace:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
-                 config = AutoConfig.from_pretrained(
+                config = AutoConfig.from_pretrained(
                     self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
                 )
                 config.num_layers = self.n_layers
@@ -1705,7 +1705,7 @@ class ModelArgs:
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
-                )
+                # )
                 if self.cache_hf_flag:
                     self.cached_hf_model = model
                 state_dict = model.state_dict()
@@ -2190,7 +2190,7 @@ class ModelArgs:
                 model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
-                     model = AutoModelForCausalLM.from_pretrained(
+                    model = AutoModelForCausalLM.from_pretrained(
                         self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
                     )
                     self.cached_hf_model = model
@@ -2398,7 +2398,7 @@ class HfAttentionWrapper:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-     def load_state_dict(self, state_dict, fuse_qkv=False):
+    def load_state_dict(self, state_dict, fuse_qkv=False):
         return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
 
     @property
