@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #include "core_descriptor.hpp"
+#include <iostream>
+#include <fstream>
 
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
@@ -29,6 +32,30 @@
 #include "utils.hpp"
 
 namespace tt {
+
+void validate_file_exists(const std::string& path) {
+    std::ifstream f(path);
+    if (!f.good()) {
+        std::cerr << "[TT-Metal][core_descriptor] ERROR: Core descriptor YAML file not found: " << path << std::endl;
+        throw std::runtime_error("Core descriptor YAML file not found: " + path);
+    }
+}
+
+void log_yaml_debug(const std::string& msg) {
+    std::cerr << "[TT-Metal][core_descriptor][DEBUG] " << msg << std::endl;
+}
+
+template <typename T>
+T safe_yaml_as(const YAML::Node& node, const std::string& context_desc) {
+    try {
+        return node.as<T>();
+    } catch (const std::exception& e) {
+        std::stringstream ss;
+        ss << "YAML type conversion failed at " << context_desc << ": " << e.what() << "\nNode content: ";
+        ss << YAML::Dump(node);
+        throw std::runtime_error(ss.str());
+    }
+}
 
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
@@ -100,6 +127,7 @@ const core_descriptor_t& get_core_descriptor_config(
     }
 
     std::string product_name = get_product_name(arch, num_harvested_on_axis);
+    log_yaml_debug("Device ID: " + std::to_string(device_id) + ", ARCH: " + std::to_string(static_cast<int>(arch)) + ", product_name: " + product_name + ", num_hw_cqs: " + std::to_string(num_hw_cqs));
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(device_id) == BoardType::N150) {
             // some Galaxy machines are setup with N150s that have 0 harvested rows.
@@ -118,62 +146,97 @@ const core_descriptor_t& get_core_descriptor_config(
         return config_by_num_cqs.at(num_hw_cqs);
     }
 
-    YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(arch, dispatch_core_config));
-    YAML::Node desc_yaml =
-        core_descriptor_yaml[product_name]
-                            [(dispatch_core_config.get_dispatch_core_axis() == tt_metal::DispatchCoreAxis::ROW) ? "row"
-                                                                                                                : "col"]
-                            [std::to_string(num_hw_cqs)];
+    std::string yaml_path = get_core_descriptor_file(arch, dispatch_core_config);
+    log_yaml_debug("Attempting to load core descriptor YAML: " + yaml_path);
+    validate_file_exists(yaml_path);
+    YAML::Node core_descriptor_yaml;
+    try {
+        core_descriptor_yaml = YAML::LoadFile(yaml_path);
+    } catch (const std::exception& e) {
+        std::stringstream ss;
+        ss << "Failed to load YAML file: " << yaml_path << "\n" << e.what();
+        throw std::runtime_error(ss.str());
+    }
+    if (!core_descriptor_yaml[product_name]) {
+        throw std::runtime_error("YAML missing product_name node: " + product_name + " in file: " + yaml_path);
+    }
+    std::string axis = (dispatch_core_config.get_dispatch_core_axis() == tt_metal::DispatchCoreAxis::ROW) ? "row" : "col";
+    if (!core_descriptor_yaml[product_name][axis]) {
+        throw std::runtime_error("YAML missing axis node: " + axis + " for product_name: " + product_name + " in file: " + yaml_path);
+    }
+    if (!core_descriptor_yaml[product_name][axis][std::to_string(num_hw_cqs)]) {
+        throw std::runtime_error("YAML missing num_hw_cqs node: " + std::to_string(num_hw_cqs) + " for axis: " + axis + " in file: " + yaml_path);
+    }
+    YAML::Node desc_yaml = core_descriptor_yaml[product_name][axis][std::to_string(num_hw_cqs)];
+    log_yaml_debug("Navigated YAML nodes: product_name=" + product_name + ", axis=" + axis + ", num_hw_cqs=" + std::to_string(num_hw_cqs));
 
     // Parse the yaml into core_descriptor_t
+
     std::vector<RelativeCoreCoord> storage_cores;
+    if (!desc_yaml["storage_cores"]) {
+        throw std::runtime_error("YAML missing required node: storage_cores");
+    }
     for (const auto& core_node : desc_yaml["storage_cores"]) {
         RelativeCoreCoord coord = {};
         if (core_node.IsSequence()) {
-            // Logical coord
-            coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
+            coord = RelativeCoreCoord({.x = safe_yaml_as<int>(core_node[0], "storage_cores.x"), .y = safe_yaml_as<int>(core_node[1], "storage_cores.y")});
         } else {
-            TT_THROW("Only logical relative coords supported for storage_cores cores");
+            throw std::runtime_error("Only logical relative coords supported for storage_cores cores");
         }
         storage_cores.push_back(coord);
     }
     std::optional<uint32_t> storage_core_bank_size = std::nullopt;
-    if (not storage_cores.empty()) {
-        try {
-            storage_core_bank_size = desc_yaml["storage_core_bank_size"].as<uint32_t>();
-        } catch (std::runtime_error& ex) {
-            TT_THROW(
-                "Core descriptor yaml for {} needs to specify storage_core_bank_size since there are {} storage cores!",
-                get_string_lowercase(arch),
-                storage_cores.size());
+    if (!storage_cores.empty()) {
+        if (!desc_yaml["storage_core_bank_size"]) {
+            throw std::runtime_error("YAML missing required node: storage_core_bank_size");
         }
+        storage_core_bank_size = safe_yaml_as<uint32_t>(desc_yaml["storage_core_bank_size"], "storage_core_bank_size");
     }
 
-    auto compute_with_storage_start = desc_yaml["compute_with_storage_grid_range"]["start"];
-    auto compute_with_storage_end = desc_yaml["compute_with_storage_grid_range"]["end"];
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
+
+    YAML::Node compute_with_storage_start, compute_with_storage_end;
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && product_name == "nebula_x1") {
+        if (!desc_yaml["tg_compute_with_storage_grid_range"] || !desc_yaml["tg_compute_with_storage_grid_range"]["start"] || !desc_yaml["tg_compute_with_storage_grid_range"]["end"]) {
+            throw std::runtime_error("YAML missing tg_compute_with_storage_grid_range/start/end");
+        }
         compute_with_storage_start = desc_yaml["tg_compute_with_storage_grid_range"]["start"];
         compute_with_storage_end = desc_yaml["tg_compute_with_storage_grid_range"]["end"];
+    } else {
+        if (!desc_yaml["compute_with_storage_grid_range"] || !desc_yaml["compute_with_storage_grid_range"]["start"] || !desc_yaml["compute_with_storage_grid_range"]["end"]) {
+            throw std::runtime_error("YAML missing compute_with_storage_grid_range/start/end");
+        }
+        compute_with_storage_start = desc_yaml["compute_with_storage_grid_range"]["start"];
+        compute_with_storage_end = desc_yaml["compute_with_storage_grid_range"]["end"];
     }
-    TT_ASSERT(compute_with_storage_start.IsSequence() and compute_with_storage_end.IsSequence());
-    TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
-    TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
-    CoreCoord compute_grid_size(
-        (compute_with_storage_end[0].as<size_t>() - compute_with_storage_start[0].as<size_t>()) + 1,
-        (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1);
+    if (!compute_with_storage_start.IsSequence() || !compute_with_storage_end.IsSequence()) {
+        throw std::runtime_error("YAML compute_with_storage_grid_range start/end must be sequences");
+    }
+    size_t start_x = safe_yaml_as<size_t>(compute_with_storage_start[0], "compute_with_storage_grid_range.start.x");
+    size_t start_y = safe_yaml_as<size_t>(compute_with_storage_start[1], "compute_with_storage_grid_range.start.y");
+    size_t end_x = safe_yaml_as<size_t>(compute_with_storage_end[0], "compute_with_storage_grid_range.end.x");
+    size_t end_y = safe_yaml_as<size_t>(compute_with_storage_end[1], "compute_with_storage_grid_range.end.y");
+    if (end_x < start_x || end_y < start_y) {
+        throw std::runtime_error("YAML compute_with_storage_grid_range end < start");
+    }
+    CoreCoord compute_grid_size((end_x - start_x) + 1, (end_y - start_y) + 1);
+
 
     std::vector<RelativeCoreCoord> compute_cores;
     for (auto x = 0; x < compute_grid_size.x; x++) {
         for (auto y = 0; y < compute_grid_size.y; y++) {
-            const RelativeCoreCoord relative_coord{.x = x, .y = y};
+            const RelativeCoreCoord relative_coord{.x = static_cast<int>(x), .y = static_cast<int>(y)};
             compute_cores.push_back(relative_coord);
         }
     }
 
+
     std::vector<RelativeCoreCoord> dispatch_cores;
     auto dispatch_cores_string = "dispatch_cores";
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && product_name == "nebula_x1") {
         dispatch_cores_string = "tg_dispatch_cores";
+    }
+    if (!desc_yaml[dispatch_cores_string]) {
+        throw std::runtime_error("YAML missing required node: " + std::string(dispatch_cores_string));
     }
 
     CoreCoord grid_size =
@@ -184,8 +247,7 @@ const core_descriptor_t& get_core_descriptor_config(
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
         RelativeCoreCoord coord = {};
         if (core_node.IsSequence()) {
-            // Logical coord
-            coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
+            coord = RelativeCoreCoord({.x = safe_yaml_as<int>(core_node[0], std::string(dispatch_cores_string) + ".x"), .y = safe_yaml_as<int>(core_node[1], std::string(dispatch_cores_string) + ".y")});
             if (dispatch_core_config.get_core_type() == CoreType::ETH) {
                 auto logical_coord = get_core_coord_from_relative(coord, grid_size);
                 if (logical_active_eth_cores.find(logical_coord) != logical_active_eth_cores.end()) {
@@ -193,13 +255,13 @@ const core_descriptor_t& get_core_descriptor_config(
                 }
             }
         } else {
-            TT_THROW("Only logical relative coords supported for dispatch_cores cores");
+            throw std::runtime_error("Only logical relative coords supported for dispatch_cores cores");
         }
         dispatch_cores.push_back(coord);
     }
-    TT_ASSERT(
-        dispatch_cores.size() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
-        "Dispatch cores size must be positive");
+    if (dispatch_cores.empty() && !tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        throw std::runtime_error("Dispatch cores size must be positive");
+    }
 
     std::vector<CoreCoord> logical_compute_cores;
     logical_compute_cores.reserve(compute_cores.size());
