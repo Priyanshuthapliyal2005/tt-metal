@@ -35,6 +35,9 @@ RUN wget https://github.com/tenstorrent/tt-firmware/raw/refs/tags/$FW_TAG/$FW_PA
 # Install Poetry for pyproject.toml support
 RUN pip3 install poetry
 
+# Disable poetry virtualenvs inside Docker
+RUN poetry config virtualenvs.create false
+
 # Copy your project files into the image
 WORKDIR /workspace
 COPY . .
