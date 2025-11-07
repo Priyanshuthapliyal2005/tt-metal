@@ -6,4 +6,6 @@ COPY . .
 RUN python3 -m pip install -r tt_metal/python_env/requirements-dev.txt
 ENV PYTHONPATH=/workspace
 ENV TT_METAL_HOME=/workspace
-CMD ["python3", "models/tt_transformers/demo/simple_text_demo.py"]
+
+# Reset the card before running the application
+CMD ["sh", "-c", "tt-smi -r && python3 models/tt_transformers/demo/simple_text_demo.py"]
