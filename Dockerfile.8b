@@ -3,6 +3,22 @@ FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest
 WORKDIR /workspace
 COPY . .
 
+RUN bash install_dependencies.sh --docker --no-distributed
+
+# Install pinned SFPI x86_64 Debian package (ensure /opt/tenstorrent/sfpi exists)
+ARG SFPI_VERSION=7.7.0-release
+ARG SFPI_FILE=sfpi_${SFPI_VERSION}_x86_64_debian.deb
+ARG SFPI_SHA256=cb6d7eaae1a8207cb2eb61c9add897090b4291dd8a961fe06df45569d0a8f1b0
+RUN set -eux; \
+	SFPI_URL="https://github.com/tenstorrent/sfpi/releases/download/${SFPI_VERSION}/${SFPI_FILE}"; \
+	wget -O /tmp/${SFPI_FILE} "$SFPI_URL"; \
+	echo "${SFPI_SHA256}  /tmp/${SFPI_FILE}" > /tmp/sfpi.sha256; \
+	sha256sum -c /tmp/sfpi.sha256; \
+	apt-get update -qq; \
+	apt-get install -y --no-install-recommends /tmp/${SFPI_FILE}; \
+	rm -f /tmp/${SFPI_FILE} /tmp/sfpi.sha256; \
+	test -d /opt/tenstorrent/sfpi || (echo 'SFPI install failed: /opt/tenstorrent/sfpi missing' && exit 1)
+
 RUN python3 -m pip install -r tt_metal/python_env/requirements-dev.txt
 
 ENV PYTHONPATH=/workspace
