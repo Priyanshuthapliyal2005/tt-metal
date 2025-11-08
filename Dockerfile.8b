@@ -16,8 +16,18 @@ RUN set -eux; \
 	sha256sum -c /tmp/sfpi.sha256; \
 	apt-get update -qq; \
 	apt-get install -y --no-install-recommends /tmp/${SFPI_FILE}; \
-	rm -f /tmp/${SFPI_FILE} /tmp/sfpi.sha256; \
-	test -d /opt/tenstorrent/sfpi || (echo 'SFPI install failed: /opt/tenstorrent/sfpi missing' && exit 1)
+	rm -f /tmp/${SFPI_FILE} /tmp/sfpi.sha256
+
+# Verify SFPI installation - critical for runtime device initialization
+RUN test -d /opt/tenstorrent/sfpi || \
+	(echo 'ERROR: SFPI install failed - /opt/tenstorrent/sfpi missing' && exit 1)
+RUN test -f /opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++ || \
+	(echo 'ERROR: SFPI compiler not found at /opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++' && exit 1)
+
+# Bundle SFPI in workspace runtime as fallback for deployment environments
+RUN mkdir -p /workspace/runtime/sfpi && \
+	cp -r /opt/tenstorrent/sfpi/* /workspace/runtime/sfpi/ && \
+	echo "SFPI bundled to /workspace/runtime/sfpi as fallback"
 
 RUN python3 -m pip install -r tt_metal/python_env/requirements-dev.txt
 
