@@ -24,24 +24,21 @@ RUN test -d /opt/tenstorrent/sfpi || \
 
 # Create health check script for hardware detection
 RUN echo '#!/bin/bash\n\
-set -e\n\
+set -euo pipefail\n\
 echo "=== Tenstorrent Hardware Detection ==="\n\
-' > /usr/local/bin/check-hardware.sh && chmod +x /usr/local/bin/check-hardware.sh
 if ! command -v tt-smi &>/dev/null; then\n\
-    echo "ERROR: tt-smi not found in PATH"\n\
-    exit 2\n\
+  echo "ERROR: tt-smi not found in PATH"\n\
+  exit 2\n\
 fi\n\
 tt_smi_output=$(tt-smi 2>&1 || true)\n\
 echo "$tt_smi_output"\n\
 if echo "$tt_smi_output" | grep -qi "no devices"; then\n\
-    echo "ERROR: No Tenstorrent devices detected (tt-smi reports no devices)"\n\
-    exit 2\n\
+  echo "ERROR: No Tenstorrent devices detected (tt-smi reports no devices)"\n\
+  exit 2\n\
 fi\n\
 echo "Tenstorrent devices detected"\n\
-# attempt a reset, but do not fail the check if reset fails\n\
 tt-smi -r || echo "WARNING: tt-smi -r failed (non-fatal)"\n\
 exit 0\n\
-' > /usr/local/bin/check-hardware.sh && chmod +x /usr/local/bin/check-hardware.sh
 ' > /usr/local/bin/check-hardware.sh && chmod +x /usr/local/bin/check-hardware.sh
 
 RUN python3 -m pip install -r tt_metal/python_env/requirements-dev.txt
@@ -51,6 +48,5 @@ ENV TT_METAL_HOME=/workspace
 ENV HF_MODEL=mistralai/Ministral-8B-Instruct-2410
 ENV TT_METAL_SLOW_DISPATCH_MODE=1
 
-# Entrypoint that checks for hardware before running tests
-CMD ["sh", "-c", "check-hardware.sh && if [ -z \"$TT_METAL_NO_HARDWARE\" ]; then python3 -m pytest models/tt_transformers/demo/simple_text_demo.py::test_demo_text -k 'batch-1 and performance' --capture=no; else echo 'Skipping hardware tests - no Tenstorrent devices available'; echo 'To run this container, you need:'; echo '1. Tenstorrent AI accelerator hardware (Grayskull/Wormhole/Blackhole)'; echo '2. Proper device drivers installed on the host'; echo '3. Device access permissions configured'; python3 -c \"import ttnn; print(f'ttnn version: {ttnn.__version__}'); print('Container is ready but requires hardware to run tests')\"; fi"]
-CMD ["sh", "-c", "/usr/local/bin/check-hardware.sh && python3 -m pytest models/tt_transformers/demo/simple_text_demo.py::test_demo_text -k 'batch-1 and performance' --capture=no"]
+# Run hardware check, then execute demo test
+CMD ["/bin/bash", "-c", "/usr/local/bin/check-hardware.sh && python -m pytest models/tt_transformers/demo/simple_text_demo.py::test_demo_test -k batch-1"]
