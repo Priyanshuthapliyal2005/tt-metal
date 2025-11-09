@@ -21,21 +21,34 @@ RUN set -eux; \
 # Verify SFPI installation - critical for runtime device initialization
 RUN test -d /opt/tenstorrent/sfpi || \
 	(echo 'ERROR: SFPI install failed - /opt/tenstorrent/sfpi missing' && exit 1)
-# Debug: List SFPI directory structure to find actual compiler location
-RUN echo "=== SFPI directory structure ===" && \
-	find /opt/tenstorrent/sfpi -type f -name "riscv32*g++*" 2>/dev/null || \
-	(echo "Listing /opt/tenstorrent/sfpi structure:" && ls -la /opt/tenstorrent/sfpi/ && \
-	 echo "Searching for compiler binaries:" && find /opt/tenstorrent/sfpi -type f -executable 2>/dev/null | head -20)
 
-# Bundle SFPI in workspace runtime as fallback for deployment environments
-RUN mkdir -p /workspace/runtime/sfpi && \
-	cp -r /opt/tenstorrent/sfpi/* /workspace/runtime/sfpi/ && \
-	echo "SFPI bundled to /workspace/runtime/sfpi as fallback"
+# Create health check script for hardware detection
+RUN echo '#!/bin/bash\n\
+set -e\n\
+echo "=== Tenstorrent Hardware Detection ==="\n\
+if command -v tt-smi &> /dev/null; then\n\
+    if tt-smi 2>&1 | grep -q "No devices"; then\n\
+        echo "WARNING: No Tenstorrent devices detected"\n\
+        echo "This container requires Tenstorrent hardware (Grayskull/Wormhole/Blackhole)"\n\
+        echo "Running in NO-HARDWARE mode - tests will be skipped"\n\
+        export TT_METAL_NO_HARDWARE=1\n\
+        exit 0\n\
+    else\n\
+        echo "Tenstorrent devices found:"\n\
+        tt-smi\n\
+        tt-smi -r\n\
+    fi\n\
+else\n\
+    echo "WARNING: tt-smi not found"\n\
+fi\n\
+' > /usr/local/bin/check-hardware.sh && chmod +x /usr/local/bin/check-hardware.sh
 
 RUN python3 -m pip install -r tt_metal/python_env/requirements-dev.txt
 
 ENV PYTHONPATH=/workspace
 ENV TT_METAL_HOME=/workspace
 ENV HF_MODEL=mistralai/Ministral-8B-Instruct-2410
+ENV TT_METAL_SLOW_DISPATCH_MODE=1
 
-CMD ["sh", "-c", "tt-smi -r && python3 -m pytest models/tt_transformers/demo/simple_text_demo.py::test_demo_text -k 'batch-1 and performance' --capture=no"]
+# Entrypoint that checks for hardware before running tests
+CMD ["sh", "-c", "check-hardware.sh && if [ -z \"$TT_METAL_NO_HARDWARE\" ]; then python3 -m pytest models/tt_transformers/demo/simple_text_demo.py::test_demo_text -k 'batch-1 and performance' --capture=no; else echo 'Skipping hardware tests - no Tenstorrent devices available'; echo 'To run this container, you need:'; echo '1. Tenstorrent AI accelerator hardware (Grayskull/Wormhole/Blackhole)'; echo '2. Proper device drivers installed on the host'; echo '3. Device access permissions configured'; python3 -c \"import ttnn; print(f'ttnn version: {ttnn.__version__}'); print('Container is ready but requires hardware to run tests')\"; fi"]
