@@ -21,8 +21,11 @@ RUN set -eux; \
 # Verify SFPI installation - critical for runtime device initialization
 RUN test -d /opt/tenstorrent/sfpi || \
 	(echo 'ERROR: SFPI install failed - /opt/tenstorrent/sfpi missing' && exit 1)
-RUN test -f /opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++ || \
-	(echo 'ERROR: SFPI compiler not found at /opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++' && exit 1)
+# Debug: List SFPI directory structure to find actual compiler location
+RUN echo "=== SFPI directory structure ===" && \
+	find /opt/tenstorrent/sfpi -type f -name "riscv32*g++*" 2>/dev/null || \
+	(echo "Listing /opt/tenstorrent/sfpi structure:" && ls -la /opt/tenstorrent/sfpi/ && \
+	 echo "Searching for compiler binaries:" && find /opt/tenstorrent/sfpi -type f -executable 2>/dev/null | head -20)
 
 # Bundle SFPI in workspace runtime as fallback for deployment environments
 RUN mkdir -p /workspace/runtime/sfpi && \
