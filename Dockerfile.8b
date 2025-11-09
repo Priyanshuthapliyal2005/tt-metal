@@ -48,5 +48,5 @@ ENV TT_METAL_HOME=/workspace
 ENV HF_MODEL=mistralai/Ministral-8B-Instruct-2410
 ENV TT_METAL_SLOW_DISPATCH_MODE=1
 
-# Run hardware check, then execute demo test
-CMD ["/bin/bash", "-c", "/usr/local/bin/check-hardware.sh && python -m pytest models/tt_transformers/demo/simple_text_demo.py::test_demo_test -k batch-1"]
+# Run hardware check, then execute demo test (force single-chip N150 mode)
+CMD ["/bin/bash", "-c", "/usr/local/bin/check-hardware.sh && MESH_DEVICE=N150 python -m pytest models/tt_transformers/demo/simple_text_demo.py::test_demo_text -k 'batch-1 and performance' --capture=no -v"]
