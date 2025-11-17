@@ -6,9 +6,9 @@ COPY . .
 RUN bash install_dependencies.sh --docker --no-distributed
 
 # Install pinned SFPI x86_64 Debian package (ensure /opt/tenstorrent/sfpi exists)
-ARG SFPI_VERSION=7.7.0-release
+ARG SFPI_VERSION=7.7.0
 ARG SFPI_FILE=sfpi_${SFPI_VERSION}_x86_64_debian.deb
-ARG SFPI_SHA256=cb6d7eaae1a8207cb2eb61c9add897090b4291dd8a961fe06df45569d0a8f1b0
+ARG SFPI_SHA256=c211d9f05fa0d187381e4b8bab01f93e1770c5573c542de29359013a7c358760
 RUN set -eux; \
 	SFPI_URL="https://github.com/tenstorrent/sfpi/releases/download/${SFPI_VERSION}/${SFPI_FILE}"; \
 	wget -O /tmp/${SFPI_FILE} "$SFPI_URL"; \
