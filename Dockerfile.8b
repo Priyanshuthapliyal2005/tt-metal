@@ -40,7 +40,9 @@ RUN python3 -m pip install -r tt_metal/python_env/requirements-dev.txt
 ENV PYTHONPATH=/workspace
 ENV TT_METAL_HOME=/workspace
 ENV HF_MODEL=mistralai/Ministral-8B-Instruct-2410
-ENV TT_METAL_SLOW_DISPATCH_MODE=1
+ENV TT_METAL_SLOW_DISPATCH_MODE=0
+ENV TT_METAL_ASYNC_DEVICE_QUEUE=1
+ENV TT_METAL_DISPATCH_CORE_TYPE=eth
 
 # Run hardware check, then execute demo test (force single-chip N150 mode)
 CMD ["/bin/bash", "-c", "/usr/local/bin/check-hardware.sh && MESH_DEVICE=N150 python -m pytest models/tt_transformers/demo/simple_text_demo.py::test_demo_text -k 'batch-1 and performance' --capture=no -v"]
