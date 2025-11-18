@@ -1,11 +1,6 @@
 FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest
 
-WORKDIR /workspace
-COPY . .
-
-RUN bash install_dependencies.sh --docker --no-distributed
-
-# Install pinned SFPI x86_64 Debian package (ensure /opt/tenstorrent/sfpi exists)
+# Install pinned SFPI x86_64 Debian package FIRST (before workspace copy)
 ARG SFPI_VERSION=7.7.0
 ARG SFPI_FILE=sfpi_${SFPI_VERSION}_x86_64_debian.deb
 ARG SFPI_SHA256=c211d9f05fa0d187381e4b8bab01f93e1770c5573c542de29359013a7c358760
@@ -21,6 +16,15 @@ RUN set -eux; \
 # Verify SFPI installation - critical for runtime device initialization
 RUN test -d /opt/tenstorrent/sfpi || \
 	(echo 'ERROR: SFPI install failed - /opt/tenstorrent/sfpi missing' && exit 1)
+
+WORKDIR /workspace
+COPY . .
+
+RUN bash install_dependencies.sh --docker --no-distributed
+
+# Create symlink from workspace to system SFPI as fallback
+RUN mkdir -p /workspace/runtime && \
+	ln -sf /opt/tenstorrent/sfpi /workspace/runtime/sfpi
 
 # Create health check script for hardware detection
 RUN echo '#!/bin/bash\n\
