@@ -9,6 +9,9 @@ COPY . .
 
 RUN bash install_dependencies.sh --docker --no-distributed
 
+# Build tt-metal to generate runtime artifacts (linker scripts, etc.)
+RUN bash build_metal.sh --without-python-bindings
+
 # Create symlink from workspace to system SFPI (primary search location)
 RUN mkdir -p /workspace/runtime && \
 	ln -sf /opt/tenstorrent/sfpi /workspace/runtime/sfpi
