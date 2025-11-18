@@ -1,28 +1,15 @@
 FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest
 
-# Install pinned SFPI x86_64 Debian package FIRST (before workspace copy)
-ARG SFPI_VERSION=7.7.0
-ARG SFPI_FILE=sfpi_${SFPI_VERSION}_x86_64_debian.deb
-ARG SFPI_SHA256=c211d9f05fa0d187381e4b8bab01f93e1770c5573c542de29359013a7c358760
-RUN set -eux; \
-	SFPI_URL="https://github.com/tenstorrent/sfpi/releases/download/${SFPI_VERSION}/${SFPI_FILE}"; \
-	wget -O /tmp/${SFPI_FILE} "$SFPI_URL"; \
-	echo "${SFPI_SHA256}  /tmp/${SFPI_FILE}" > /tmp/sfpi.sha256; \
-	sha256sum -c /tmp/sfpi.sha256; \
-	apt-get update -qq; \
-	apt-get install -y --no-install-recommends /tmp/${SFPI_FILE}; \
-	rm -f /tmp/${SFPI_FILE} /tmp/sfpi.sha256
-
-# Verify SFPI installation - critical for runtime device initialization
+# Verify SFPI from base image exists
 RUN test -d /opt/tenstorrent/sfpi || \
-	(echo 'ERROR: SFPI install failed - /opt/tenstorrent/sfpi missing' && exit 1)
+	(echo 'ERROR: SFPI not found in base image at /opt/tenstorrent/sfpi' && exit 1)
 
 WORKDIR /workspace
 COPY . .
 
 RUN bash install_dependencies.sh --docker --no-distributed
 
-# Create symlink from workspace to system SFPI as fallback
+# Create symlink from workspace to system SFPI (primary search location)
 RUN mkdir -p /workspace/runtime && \
 	ln -sf /opt/tenstorrent/sfpi /workspace/runtime/sfpi
 
