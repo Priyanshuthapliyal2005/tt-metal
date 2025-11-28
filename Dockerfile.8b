@@ -35,7 +35,12 @@ tt-smi -r || echo "WARNING: tt-smi -r failed (non-fatal)"\n\
 exit 0\n\
 ' > /usr/local/bin/check-hardware.sh && chmod +x /usr/local/bin/check-hardware.sh
 
-RUN python3 -m pip install -r tt_metal/python_env/requirements-dev.txt
+# Upgrade Rust to 1.82+ (required for pyluwen's indexmap dependency)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+	. "$HOME/.cargo/env" && \
+	rustup update stable
+
+RUN . "$HOME/.cargo/env" && python3 -m pip install -r tt_metal/python_env/requirements-dev.txt
 
 ENV PYTHONPATH=/workspace
 ENV TT_METAL_HOME=/workspace
